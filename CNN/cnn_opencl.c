@@ -5,11 +5,6 @@
 #include <string.h>
 #include "cnn.h"
 
-/*
- * TODO
- * Define global variables here. For example,
- * cl_platform_id platform;
- */
 #define CHECK_ERROR(err) \
     if(err != CL_SUCCESS) { \
         printf("[%s:%d] OpenCL error %d\n", __FILE__, __LINE__, err); \
@@ -43,12 +38,28 @@ char* get_source_code(const char* file_name, size_t* len) {
 	return source_code;
 }
 
+/*
+ * TODO
+ * Define global variables here. For example,
+ * cl_platform_id platform;
+ */
+
+cl_int err;					// Variable for Error check 
+cl_platform_id platform;	// Platform ID
+cl_device_id device;		// Device ID
+
 void cnn_init() {
-	/*
-	 * TODO
-	 * Initialize OpenCL objects as global variables. For example,
-	 * clGetPlatformIDs(1, &platform, NULL);
-	 */
+	
+	err = clGetPlatformIDs(1, &platform, NULL);
+	CHECK_ERROR(err);
+
+	err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device, NULL);
+	CHECK_ERROR(err);
+
+	/* Create a context */
+	cl_context context;
+	context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
+	CHECK_ERROR(err);
 
 }
 
