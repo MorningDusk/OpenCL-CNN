@@ -1,4 +1,4 @@
-__kernel fclayer1(__global float* input, __global float* output, __global float* weights, 
+__kernel void fclayer1(__global float* input, __global float* output, __global float* weights, 
     __global float* biases, const int outDim, const int inDim)
 {
     int loc = get_group_id(0) * outDim + get_local_id(0);
