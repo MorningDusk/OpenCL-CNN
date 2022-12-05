@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <time.h>
 #include "cnn.h"
+#include <CL/cl.h>
 
 const char* CLASS_NAME[] = {
 	"airplane",
