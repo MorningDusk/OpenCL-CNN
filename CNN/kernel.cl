@@ -35,12 +35,7 @@ __kernel void pooling_layer(__global float* input, __global float* output, const
             if (max < temp) max = temp;
         }
     }
-<<<<<<< HEAD
-=======
 
     oupt[pos_y * N + pos_x] = max;
-} 
->>>>>>> 4d1571e426f2686f122140d4fa7c68d33eccfc70
 
-    oupt[pos_y * N + pos_x] = max;
 } 
