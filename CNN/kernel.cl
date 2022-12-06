@@ -12,6 +12,25 @@ __kernel void fclayer1(__global float* input, __global float* output, __global f
     else output[loc] = 0;
 }
 
+__kernel void pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
+{
+    int pos_x = get_global_id(0);
+    int pos_y = get_global_id(1);
+    int pos_z = get_global_id(2);
+    int temp;
+    int max = 0;
+
+
+    for (int y = 0; y < 2; y++)
+    {
+        for (int x = 0; x < 2; x++)
+        {
+            temp = input[Nsquare * pos_z + N * (pos_y + y) + pos_x + x];
+            if (max < temp) max = temp;
+        }
+    }
+}
+
 /*
 __kernel fclayer2(__global float* input, __global float* output, __global float* biases
         __global float* biases, const int outDim, const int inDim)

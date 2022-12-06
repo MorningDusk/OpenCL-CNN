@@ -25,6 +25,7 @@ static void pooling2x2(float* input, float* output, int N) {
  * N = width and height of an output image
  * Thus, input is (D, N * 2, N * 2) and output is (D, N, N).
  */
+/*
 static void pooling_layer(float* inputs, float* outputs, int D, int N) {
 	int i;
 	for (i = 0; i < D; i++) {
@@ -33,6 +34,7 @@ static void pooling_layer(float* inputs, float* outputs, int D, int N) {
 		pooling2x2(input, output, N);
 	}
 }
+*/
 
 static void convolution3x3(float* input, float* output, float* filter, int N) {
 	int i, j, k, l;
@@ -135,6 +137,7 @@ void cnn_init() {
 	// nothing to init in the sequential version
 }
 
+/*
 void cnn(float* images, float** network, int* labels, float* confidences, int num_images) {
 	// slice the network into weights and biases
 	float* w1_1, * b1_1, * w1_2, * b1_2;
@@ -234,3 +237,4 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 	free(c5_1); free(c5_2); free(c5_3); free(p5);
 	free(fc1); free(fc2); free(fc3);
 }
+*/
