@@ -17,9 +17,8 @@ __kernel void pooling_layer(__global float* input, __global float* output, const
     int pos_x = get_global_id(0);
     int pos_y = get_global_id(1);
     int pos_z = get_global_id(2);
-    int temp;
-    int max = 0;
-
+    float temp;
+    float max = .0f;
 
     for (int y = 0; y < 2; y++)
     {
@@ -29,6 +28,10 @@ __kernel void pooling_layer(__global float* input, __global float* output, const
             if (max < temp) max = temp;
         }
     }
+    
+    int output_x = get_group_id(0);
+    int output_y = get_group_id(1);
+    output[output_y * (N / 4) + output_x] = max;
 }
 
 /*
