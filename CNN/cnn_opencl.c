@@ -1,47 +1,61 @@
-#include <CL/cl.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include <string.h>
-#include "cnn.h"
+#include <math.h>
+#include <time.h>
+#include <CL/cl.h>
 
 #define CHECK_ERROR(err) \
-    if(err != CL_SUCCESS) { \
-        printf("[%s:%d] OpenCL error %d\n", __FILE__, __LINE__, err); \
-        exit(EXIT_FAILURE); \
-    }  //에러 확인 함수
+	if(err != CL_SUCCESS) { \
+		printf("[%s:%d] OpenCL error %d\n", __FILE__, __LINE__, err); \
+		exit(EXIT_FAILURE); \
+	}
 
-void build_error(cl_program program, cl_device_id device, cl_int err)
-{
-	if (err == CL_BUILD_PROGRAM_FAILURE)
-	{
-		size_t log_size;
-		char* log;
+#define CHECK_BUILD_ERROR(err) \
+	if (err == CL_BUILD_PROGRAM_FAILURE) { \
+		size_t log_size; \
+		clGetProgramBuildInfo(program, devices[0], CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size); \
+		char *log = (char*)malloc(log_size); \
+		clGetProgramBuildInfo(program, devices[0], CL_PROGRAM_BUILD_LOG, log_size, log, NULL); \
+		printf("%s\n", log); \
+		free(log); \
+	}
 
-		err = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, (void*)0, &log_size);
-		CHECK_ERROR(err);
+void softmax(float* output, int N);
+int find_max(float* fc, int N);
 
-		log = (char*)malloc(log_size + 1);
-		err = clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, log_size, log, (void*)0);
-		CHECK_ERROR(err);
-
-		log[log_size] = '\0';
-		printf("Compiler error:\n%s\n", log);
-		free(log);
-		exit(0);
-	};
-}
+const int NETWORK_SIZES[] = {
+	64 * 3 * 3 * 3, 64,
+	64 * 64 * 3 * 3, 64,
+	128 * 64 * 3 * 3, 128,
+	128 * 128 * 3 * 3, 128,
+	256 * 128 * 3 * 3, 256,
+	256 * 256 * 3 * 3, 256,
+	256 * 256 * 3 * 3, 256,
+	512 * 256 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512, 512,
+	512 * 512, 512,
+	10 * 512, 10
+};
 
 char* get_source_code(const char* file_name, size_t* len) {
 	char* source_code;
 	char buf[2] = "\0";
 	int cnt = 0;
 	size_t length;
+
 	FILE* file = fopen(file_name, "r");
+
 	if (file == NULL) {
-		printf("[%s:%d] Failed to open %s\n", __FILE__, __LINE__, file_name);
+		printf("[%s:%d] Failed to open %s ", __FILE__, __LINE__, file_name);
 		exit(EXIT_FAILURE);
 	}
+
 	fseek(file, 0, SEEK_END);
 	length = (size_t)ftell(file);
 	rewind(file);
@@ -53,9 +67,12 @@ char* get_source_code(const char* file_name, size_t* len) {
 		buf[0] = source_code[i];
 		if (buf[0] == '\n') cnt++;
 	}
+
 	source_code[length - cnt] = '\0';
-	fclose(file);
 	*len = length - cnt;
+
+	fclose(file);
+
 	return source_code;
 }
 
@@ -70,31 +87,223 @@ cl_platform_id platform;	// Platform ID
 cl_device_id device;		// Device ID
 cl_context context;
 cl_program program;
+cl_command_queue queue;
+cl_kernel convolution_layer, pooling_layer, fc_layer;
 
-void cnn_init(void) {
-	
+void cnn_init() {
+
+	/* GET DEVICE INFO */
 	err = clGetPlatformIDs(1, &platform, NULL);
 	CHECK_ERROR(err);
 
 	err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device, NULL);
 	CHECK_ERROR(err);
 
-	/* Create a context */
+	/* CREATE CONTEXT */
 	context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
+	CHECK_ERROR(err);
+
+	/* CREATE KERNEL*/
+	convolution_layer = creat_kernel("convolution_layer");
+	pooling_layer = creat_kernel("pooling_layer");
+	fc_layer = creat_kernel("fc_layer");
+
+
+	queue = clCreateCommandQueueWithProperties(context, device, 0, &err);
 	CHECK_ERROR(err);
 
 	creat_program();
 	build_program();
+
 }
 
-/*
 void cnn(float* images, float** network, int* labels, float* confidences, int num_images) {
-	/*
-	 * TODO
-	 * Implement here.
-	 * Write classification results to labels and confidences.
-	 * See "cnn_seq.c" if you don't know what to do.
-	 */
+
+	int i, j, h, cnt;
+
+	int num_of_conv_layers[] = { 2, 2, 3, 3, 3 };
+
+	const int NETWORK_SIZE[] = {
+	64 * 3 * 3 * 3, 64,
+	64 * 64 * 3 * 3, 64,
+	128 * 64 * 3 * 3, 128,
+	128 * 128 * 3 * 3, 128,
+	256 * 128 * 3 * 3, 256,
+	256 * 256 * 3 * 3, 256,
+	256 * 256 * 3 * 3, 256,
+	512 * 256 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512 * 3 * 3, 512,
+	512 * 512, 512,
+	512 * 512, 512,
+	10 * 512, 10
+	};
+
+	int size_of_conv_layers[5] = {
+		64 * 32 * 32,
+		128 * 16 * 16,
+		256 * 8 * 8,
+		512 * 4 * 4,
+		512 * 2 * 2
+	};
+
+	int conv_layer_args[5][3] = {
+		{ 64, 3, 32 },
+		{ 128, 64, 16 },
+		{ 256, 128, 8 },
+		{ 512, 256, 4 },
+		{ 512, 512, 2 }
+	};
+
+	int size_of_pooling_layers[5][3] = {
+		{ 64, 16, 16 },
+		{ 128, 8, 8 },
+		{ 256, 4, 4 },
+		{ 512, 2, 2 },
+		{ 512, 1, 1 }
+	};
+
+	int size_of_fc_layers[3] = {
+		512,
+		512,
+		10
+	};
+
+	float fc3[10];
+
+	size_t global_size, global_size2[2], global_size3[3];
+	size_t local_size, local_size2[2], local_size3[3];
+
+	cl_mem W[5][3], B[5][3];
+	cl_mem C[5][3];
+	cl_mem P[5];
+	cl_mem FC[3];
+
+	cnt = 0;
+
+	/* Create Weight, bias Buffer */
+	for (i = 0; i < 5; i++)
+		for (j = 0; j < num_of_conv_layers[i]; j++) {
+			W[i][j] = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * NETWORK_SIZES[cnt], network[cnt++], &err);
+			CHECK_ERROR(err);
+			B[i][j] = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * NETWORK_SIZES[cnt], network[cnt++], &err);
+			CHECK_ERROR(err);
+		}
+
+	/* Create Convolution Buffer */
+	for (i = 0; i < 5; i++)
+		for (j = 0; j < num_of_conv_layers[i]; j++) {
+			C[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * size_of_conv_layers[i], NULL, &err);
+			CHECK_ERROR(err);
+		}
+
+	/* Create Pooling Buffer */
+	for (i = 0; i < 5; i++) {
+		P[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * size_of_pooling_layers[i][0] *
+			size_of_pooling_layers[i][1] * size_of_pooling_layers[i][2], NULL, &err);
+		CHECK_ERROR(err);
+	}
+
+	/* Create FC layer Buffer */
+	for (i = 0; i < 3; i++) {
+		FC[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * size_of_fc_layers[i], NULL, &err);
+		CHECK_ERROR(err);
+	}
+
+	/* Run CNN */
+	for (i = 0; i < num_images; ++i) {
+
+		float* image = images + i * 3 * 32 * 32;
+
+		/* Start Convolution Layer*/
+		for (j = 0; j < 5; j++) {
+			for (h = 0; h < num_of_conv_layers[j]; h++) {
+
+			}
+
+
+			/* Start Pooling Layer*/
+
+			global_size3[0] = size_of_pooling_layers[j][0]; global_size3[1] = size_of_pooling_layers[j][1]; global_size3[2] = size_of_pooling_layers[j][2];
+			local_size3[0] = 4; local_size3[1] = 4; local_size3[2] = 4;
+			clEnqueueNDRangeKernel(queue, pooling_layer, 3, NULL, global_size3, local_size3, 0, NULL, NULL);
+			CHECK_ERROR(err);
+
+			err = clFinish(queue);
+			CHECK_ERROR(err);
+		}
+
+		/* Start FC Layer */
+		for (h = 0; h < 3; h++) {
+
+			global_size2[0] = size_of_fc_layers[h]; global_size2[1] = N;
+			local_size2[0] = 1; local_size2[1] = 64;
+			clEnqueueNDRangeKernel(queue, fc_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
+			CHECK_ERROR(err);
+			err = clFinish(queue);
+			CHECK_ERROR(err);
+		}
+
+		err = clEnqueueReadBuffer(queue, FC[3], CL_TRUE, 0, sizeof(float) * size_of_fc_layers[3], fc3, 0, NULL, NULL);
+		CHECK_ERROR(err);
+		softmax(fc3, 10);
+		labels[i] = find_max(fc3, 10);
+		confidences[i] = fc3[labels[i]];
+
+	}
+
+	for (i = 0; i < 5; i++)
+		for (j = 0; j < num_of_conv_layers[i]; j++) {
+			clReleaseMemObject(W[i][j]);
+			clReleaseMemObject(B[i][j]);
+			if (0 < i) { err = clReleaseMemObject(C[i][j]); }
+			if (i == 0) { err = clReleaseMemObject(FC[j]); } // i == 0 일때 1~3 까지 총 3번 실행됨
+		}
+
+	clReleaseMemObject(P[i]);
+	clReleaseKernel(convolution_layer);
+	clReleaseKernel(pooling_layer);
+	clReleaseKernel(fc_layer);
+	eclReleaseProgram(program);
+	clReleaseCommandQueue(queue);
+	eclReleaseContext(context);
+
+	free(device);
+	free(platform);
+
+}
+
+void softmax(float* output, int N) {
+	int i;
+	float max = output[0];
+	float sum = 0;
+
+	for (i = 1; i < N; i++)
+		max = (output[i] > max) ? output[i] : max;
+
+	for (i = 0; i < N; i++)
+		sum += exp(output[i] - max);
+
+	for (i = 0; i < N; i++)
+		output[i] = exp(output[i] - max) / sum;
+}
+
+int find_max(float* fc, int N) {
+	int i;
+	int maxid = 0;
+	float maxval = 0;
+
+	for (i = 0; i < N; i++)
+		if (maxval < fc[i]) {
+			maxval = fc[i];
+			maxid = i;
+		}
+
+	return maxid;
+}
 
 cl_command_queue* creat_queue(int count)
 {
@@ -107,7 +316,6 @@ cl_command_queue* creat_queue(int count)
 
 	return queue;
 }
-
 void creat_program(void)
 {
 	cl_int err;
