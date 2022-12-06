@@ -241,28 +241,31 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 		float* w[3] = {network[26], network[28], network[30]};
 		float* b[3] = {network[27], network[29], network[31]};
 		for (i = 0; i < 3; i++) {
-	
-				
+
+
 			err = clSetKernelArg(fc_layer, 0, sizeof(cl_mem), P + 5);
 			if (i != 0) {
 				err = clSetKernelArg(fc_layer, 0, sizeof(cl_mem), FC + (i - 1));
 			} CHECK_ERROR(err);
 
-			err = clSetKernelArg(fc_layer, 1, sizeof(cl_mem), FC + i);			
+			err = clSetKernelArg(fc_layer, 1, sizeof(cl_mem), FC + i);
 			CHECK_ERROR(err);
-			err = clSetKernelArg(fc_layer, 2, sizeof(cl_float), &w[i]);			
+			err = clSetKernelArg(fc_layer, 2, sizeof(cl_float), &w[i]);
 			CHECK_ERROR(err);
-			err = clSetKernelArg(fc_layer, 3, sizeof(cl_float), &b[i]);			
+			err = clSetKernelArg(fc_layer, 3, sizeof(cl_float), &b[i]);
 			CHECK_ERROR(err);
-			err = clSetKernelArg(fc_layer, 4, sizeof(int), size_of_fc_layers + h);			
-			CHECK_ERROR(err);
-			
+
 			int N = 512;
-			err = clSetKernelArg(fc_layer, 5, sizeof(int), &N);			
+			err = clSetKernelArg(fc_layer, 4, sizeof(int), N);
 			CHECK_ERROR(err);
-			
-			global_size2[0] = size_of_fc_layers[h]; global_size2[1] = N;
-			local_size2[0] = 1; local_size2[1] = 64;
+
+			err = clSetKernelArg(fc_layer, 5, sizeof(int), size_of_fc_layers + i);
+			CHECK_ERROR(err);
+
+			global_size2[0] = N;
+			global_size2[1] = size_of_fc_layers[i];	
+			local_size2[0] = 64;	
+			local_size2[1] = 1;		
 
 			clEnqueueNDRangeKernel(queue, fc_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);			
 			CHECK_ERROR(err);
