@@ -44,7 +44,7 @@ void* read_bytes(const char* fn, size_t n) {
  */
 const int IMAGE_CHW = 3 * 32 * 32 * sizeof(float);
 float* read_images(size_t n) {
-	return (float*)read_bytes("cifar10_image.bin", n * IMAGE_CHW);
+	return (float*)read_bytes("images.bin", n * IMAGE_CHW);
 }
 
 /*
@@ -52,7 +52,7 @@ float* read_images(size_t n) {
  * 10000 * sizeof(int) = 40000 bytes are expected.
  */
 int* read_labels(size_t n) {
-	return (int*)read_bytes("cifar10_label.bin", n * sizeof(int));
+	return (int*)read_bytes("labels.bin", n * sizeof(int));
 }
 
 /*
@@ -75,6 +75,7 @@ int* read_labels(size_t n) {
  * fc3     : weight ( 10, 512) bias ( 10)
  * Thus, 60980520 bytes are expected.
  */
+
 const int NETWORK_SIZES[] = {
 	64 * 3 * 3 * 3, 64,
 	64 * 64 * 3 * 3, 64,

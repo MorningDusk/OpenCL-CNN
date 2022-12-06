@@ -4,28 +4,29 @@ __global float* biases, const int inDim, const int outDim) {
     int i = get_global_id(0);
     int j = get_global_id(1);
 
-    __local float l_sum = 0;
+    float l_sum = 0;
 
     l_sum += input[j] * weights[(i * inDim) + j];
     barrier(CLK_LOCAL_MEM_FENCE);
 
-    if(j == 0) 
+    if(j == 0) {
         l_sum += biases[i];
         output[i] = (l_sum > 0) ? l_sum : 0;
     }
   
 }
 
-__kernel void pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
-{
+__kernel void pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare) {
+    
     int pos_z = get_global_id(0);
     int pos_y = get_global_id(1);
     int pos_x = get_global_id(2);
+
     float temp;
     float max = .0f;
 
-    __global float* inpt = input + pos_z * Nsquare * 4;
-    __global float* oupt = output + pos_z * Nsquare;
+    __global float * inpt = input + pos_z * Nsquare * 4;
+    __global float * oupt = output + pos_z * Nsquare;
 
     for (int y = 0; y < 2; y++)
     {
