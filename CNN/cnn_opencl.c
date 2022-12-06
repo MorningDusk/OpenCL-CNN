@@ -71,7 +71,7 @@ cl_device_id device;		// Device ID
 cl_context context;
 cl_program program;
 
-void cnn_init() {
+void cnn_init(void) {
 	
 	err = clGetPlatformIDs(1, &platform, NULL);
 	CHECK_ERROR(err);
@@ -80,12 +80,11 @@ void cnn_init() {
 	CHECK_ERROR(err);
 
 	/* Create a context */
-	cl_context context;
 	context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
 	CHECK_ERROR(err);
-
 }
 
+/*
 void cnn(float* images, float** network, int* labels, float* confidences, int num_images) {
 	/*
 	 * TODO
@@ -93,5 +92,43 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 	 * Write classification results to labels and confidences.
 	 * See "cnn_seq.c" if you don't know what to do.
 	 */
+
+cl_command_queue* creat_queue(int count)
+{
+	cl_int err = 0;
+	cl_command_queue* queue = (cl_command_queue*)malloc(sizeof(cl_command_queue) * count);
+	for (int i = 0; i < count; i++) {
+		queue[i] = clCreateCommandQueue(context, device, 0, &err);
+		CHECK_ERROR(err);
+	}
+
+	return queue;
+}
+
+void creat_program(void)
+{
+	cl_int err;
+	size_t source_code_len;
+	char* source_code = get_source_code("kernel.cl", &source_code_len);
+	program = clCreateProgramWithSource(context, 1, (const char**)&source_code, &source_code_len, &err);
+	CHECK_ERROR(err);
+}
+
+void build_program(void)
+{
+	cl_int err;
+	err = clBuildProgram(program, 1, &device, "", NULL, NULL);
+	build_error(program, device, err);
+	CHECK_ERROR(err);
+}
+
+cl_kernel creat_kernel(const char* kernel_name)
+{
+	cl_int err;
+	cl_kernel kernel = clCreateKernel(program, kernel_name, &err);
+	CHECK_ERROR(err);
+
+	return kernel;
+}
 
 }
