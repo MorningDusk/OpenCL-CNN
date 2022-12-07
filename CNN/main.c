@@ -75,6 +75,7 @@ int* read_labels(size_t n) {
  * fc3     : weight ( 10, 512) bias ( 10)
  * Thus, 60980520 bytes are expected.
  */
+/*
 const int NETWORK_SIZES[] = {
 	64 * 3 * 3 * 3, 64,
 	64 * 64 * 3 * 3, 64,
@@ -93,6 +94,7 @@ const int NETWORK_SIZES[] = {
 	512 * 512, 512,
 	10 * 512, 10
 };
+*/
 
 float* read_network() {
 	return (float*)read_bytes("network.bin", 60980520);
