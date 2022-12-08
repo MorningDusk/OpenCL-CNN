@@ -1,5 +1,9 @@
-__kernel void fc_layer(__global float* input, __global float* output, __global float* weights, 
-__global float* biases, const int inDim, const int outDim) {
+__kernel void convolution_layer() {
+
+
+}
+
+__kernel void fc_layer(__global float* input, __global float* output, __global float* weights, __global float* biases, const int inDim, const int outDim) {
     
     int i = get_global_id(0);
     int j = get_global_id(1);

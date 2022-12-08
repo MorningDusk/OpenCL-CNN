@@ -21,9 +21,6 @@
     <ClCompile Include="cnn_opencl.c">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClCompile Include="cnn_seq.c">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
     <ClCompile Include="compare.c">
       <Filter>소스 파일</Filter>
     </ClCompile>
@@ -34,6 +31,9 @@
   <ItemGroup>
     <None Include=".editorconfig" />
     <None Include=".gitignore" />
+    <None Include="kernel.cl">
+      <Filter>소스 파일</Filter>
+    </None>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="cnn.h">
