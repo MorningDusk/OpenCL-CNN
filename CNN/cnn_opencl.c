@@ -332,7 +332,7 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
         global_size2[0] = N;
         global_size2[1] = FC_LAYER_SIZES[i];
-        local_size2[0] = 64;
+        local_size2[0] = N;
         local_size2[1] = 1;
 
         clEnqueueNDRangeKernel(queue, f_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
