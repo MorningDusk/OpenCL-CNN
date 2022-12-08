@@ -1,5 +1,5 @@
 #define ReLU(x) (((x)>0)?(x):0)
-__kernel void convolution_layer(__global float* inputs, __global float* outputs, __global float* filters, __global float* biases, int D2, int D1, int N) {
+__kernel void convolution_layer (__global float* inputs, __global float* outputs, __global float* filters, __global float* biases, int D2, int D1, int N) {
 
 	int i, j, k, l;
 
@@ -38,24 +38,35 @@ __kernel void convolution_layer(__global float* inputs, __global float* outputs,
 
 }
 
-__kernel void fc_layer(__global float* input, __global float* output, __global float* weights, __global float* biases, const int inDim, const int outDim) {
-    
+__kernel void fc_layer (__global float* input, __global float* output, __global float* weights, __local float * l_sum, __global float* biases, const int inDim, const int outDim) {
+   
     int i = get_global_id(0);
-    int j = get_global_id(1);
+	int l_id = get_local_id(1);
 
-    __local float l_sum = 0;
+	int offset = (inDim * i);
 
-    l_sum += input[j] * weights[(i * inDim) + j];
-    barrier(CLK_LOCAL_MEM_FENCE);
+    l_sum[l_id] = input[offset + l_id];
+	barrier(CLK_LOCAL_MEM_FENCE);
 
-    if(j == 0) 
-        l_sum += biases[i];
-        output[i] = (l_sum > 0) ? l_sum : 0;
+    if(l_id == 0) {
+        
+		for	(int size = 0 ; size < get_local_size(0) ; size++) {
+
+		if(l_id < size) {
+			l_sum[l_id] += l_sum[l_id + size] * weights[offset + size];
+		}
+
+		barrier(CLK_LOCAL_MEM_FENCE);
+
+		}
+
+		l_sum[l_id] += biases[i];
+        output[i] = (l_sum[l_id] > 0) ? l_sum[l_id] : 0;
     }
   
 }
 
-__kernel void pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
+__kernel void pooling_layer (__global float* input, __global float* output, const int N, const int Nsquare)
 {
     int pos_z = get_global_id(0);
     int pos_y = get_global_id(1);

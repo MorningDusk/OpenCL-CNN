@@ -15,9 +15,9 @@
 #define CHECK_BUILD_ERROR(err) \
     if (err == CL_BUILD_PROGRAM_FAILURE) { \
         size_t log_size; \
-        clGetProgramBuildInfo(program, devices[0], CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size); \
+        clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, 0, NULL, &log_size); \
         char *log = (char*)malloc(log_size); \
-        clGetProgramBuildInfo(program, devices[0], CL_PROGRAM_BUILD_LOG, log_size, log, NULL); \
+        clGetProgramBuildInfo(program, device, CL_PROGRAM_BUILD_LOG, log_size, log, NULL); \
         printf("%s\n", log); \
         free(log); \
     }
@@ -94,7 +94,7 @@ void build_program(void)
 {
     cl_int err;
     err = clBuildProgram(program, 1, &device, "", NULL, NULL);
-//	build_error(program, device, err);
+    CHECK_BUILD_ERROR(err);
     CHECK_ERROR(err);
 }
 
@@ -259,17 +259,20 @@ void cnn_init(void) {
     context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
     CHECK_ERROR(err);
 
+    /* CREATE QUEUE */
+    queue = clCreateCommandQueueWithProperties(context, device, 0, &err);
+    CHECK_ERROR(err);
+
+    /* CREATE PROGRAM */
+    creat_program();
+    err = clBuildProgram(program, 1, &device, NULL, NULL, NULL);
+    CHECK_BUILD_ERROR(err);
+    CHECK_ERROR(err);
+
     /* CREATE KERNEL*/
     c_layer = creat_kernel("convolution_layer");
     p_layer = creat_kernel("pooling_layer");
     f_layer = creat_kernel("fc_layer");
-
-
-    queue = clCreateCommandQueueWithProperties(context, device, 0, &err);
-    CHECK_ERROR(err);
-
-    creat_program();
-    build_program();
 
 }
 
@@ -281,24 +284,24 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
 	const int CONV_LAYER_NUMS[] = { 2, 2, 3, 3, 3 };
 
-	const int NETWORK_SIZE[] = {
-	64 * 3 * 3 * 3, 64,
-	64 * 64 * 3 * 3, 64,
-	128 * 64 * 3 * 3, 128,
-	128 * 128 * 3 * 3, 128,
-	256 * 128 * 3 * 3, 256,
-	256 * 256 * 3 * 3, 256,
-	256 * 256 * 3 * 3, 256,
-	512 * 256 * 3 * 3, 512,
-	512 * 512 * 3 * 3, 512,
-	512 * 512 * 3 * 3, 512,
-	512 * 512 * 3 * 3, 512,
-	512 * 512 * 3 * 3, 512,
-	512 * 512 * 3 * 3, 512,
-	512 * 512, 512,
-	512 * 512, 512,
-	10 * 512, 10
-	};
+    const int NETWORK_SIZES[] = {
+    64 * 3 * 3 * 3, 64,
+    64 * 64 * 3 * 3, 64,
+    128 * 64 * 3 * 3, 128,
+    128 * 128 * 3 * 3, 128,
+    256 * 128 * 3 * 3, 256,
+    256 * 256 * 3 * 3, 256,
+    256 * 256 * 3 * 3, 256,
+    512 * 256 * 3 * 3, 512,
+    512 * 512 * 3 * 3, 512,
+    512 * 512 * 3 * 3, 512,
+    512 * 512 * 3 * 3, 512,
+    512 * 512 * 3 * 3, 512,
+    512 * 512 * 3 * 3, 512,
+    512 * 512, 512,
+    512 * 512, 512,
+    10 * 512, 10
+    };
 
 	const int CONV_LAYER_SIZES[5] = {
 		64 * 32 * 32,
@@ -384,31 +387,38 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
             for (h = 0; h < CONV_LAYER_NUMS[j]; h++) {
 				
-				if (h == 0) {
-					err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), image);
-					CHECK_ERROR(err);
-				} else {
-					err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
-					CHECK_ERROR(err);
-				}
+                if (j == 0 && h == 0) {
+                    err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), image);
+                    CHECK_ERROR(err);
+                }
+                else if (h == 0) {
+                    err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &P[j - 1]);
+                    CHECK_ERROR(err);
+                }
+                else {
+                    err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
+                    CHECK_ERROR(err);
 
-				err = clSetKernelArg(c_layer, 1, sizeof(cl_mem), &C[j][h]);
-				CHECK_ERROR(err);
+                }
 
-				err = clSetKernelArg(c_layer, 1, sizeof(cl_mem), &W[j][h]);
-				CHECK_ERROR(err);
+                err = clSetKernelArg(c_layer, 1, sizeof(cl_mem), &C[j][h]);
+                CHECK_ERROR(err);
 
-				err = clSetKernelArg(c_layer, 2, sizeof(cl_mem), &B[j][h]);
-				CHECK_ERROR(err);
+                err = clSetKernelArg(c_layer, 2, sizeof(cl_mem), &W[j][h]);
+                CHECK_ERROR(err);
 
-				err = clSetKernelArg(c_layer, 3, sizeof(int), CONV_LAYERS_ARGS[j][0]);
-				CHECK_ERROR(err);
+                err = clSetKernelArg(c_layer, 3, sizeof(cl_mem), &B[j][h]);
+                CHECK_ERROR(err);
 
-				err = clSetKernelArg(c_layer, 4, sizeof(int), CONV_LAYERS_ARGS[j][1]);
-				CHECK_ERROR(err);
+                err = clSetKernelArg(c_layer, 4, sizeof(cl_int), &CONV_LAYERS_ARGS[j][0]);
+                CHECK_ERROR(err);
 
-				err = clSetKernelArg(c_layer, 5, sizeof(int), CONV_LAYERS_ARGS[j][2]);
-				CHECK_ERROR(err);
+                err = clSetKernelArg(c_layer, 5, sizeof(cl_int), &CONV_LAYERS_ARGS[j][1]);
+                CHECK_ERROR(err);
+
+                err = clSetKernelArg(c_layer, 6, sizeof(cl_int), &CONV_LAYERS_ARGS[j][2]);
+                CHECK_ERROR(err);
+
 
             }
 
@@ -435,14 +445,15 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
         }
 
 	/* Start FC Layer */
-	// fc_layer(input, output, wegiht, bias, in, out);
-	float* w[3] = { network[26], network[28], network[30] };
+    // (__global float* input, __global float* output, __local float * l_sum, __global float* weights, biases, inDim, outDim)
+    int N = 512;
+
+    float* w[3] = { network[26], network[28], network[30] };
 	float* b[3] = { network[27], network[29], network[31] };
 
 	for (i = 0; i < 3; i++) {
 
 		err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), P + 5);
-
 		if (i != 0) {
 			err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), FC + (i - 1));
 			CHECK_ERROR(err);
@@ -450,16 +461,17 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
 		err = clSetKernelArg(f_layer, 1, sizeof(cl_mem), FC + i);
 		CHECK_ERROR(err);
-		err = clSetKernelArg(f_layer, 2, sizeof(cl_float), &w[i]);
+        err = clSetKernelArg(f_layer, 2, sizeof(cl_float) * N, NULL);
+        CHECK_ERROR(err);
+		err = clSetKernelArg(f_layer, 3, sizeof(cl_float), &w[i]);
 		CHECK_ERROR(err);
-		err = clSetKernelArg(f_layer, 3, sizeof(cl_float), &b[i]);
-		CHECK_ERROR(err);
-
-		int N = 512;
-		err = clSetKernelArg(f_layer, 4, sizeof(int), &N);
+		err = clSetKernelArg(f_layer, 4, sizeof(cl_float), &b[i]);
 		CHECK_ERROR(err);
 
-		err = clSetKernelArg(f_layer, 5, sizeof(int), FC_LAYER_SIZES + i);
+		err = clSetKernelArg(f_layer, 5, sizeof(int), &N);
+		CHECK_ERROR(err);
+
+		err = clSetKernelArg(f_layer, 6, sizeof(int), FC_LAYER_SIZES + i);
 		CHECK_ERROR(err);
 
 		global_size2[0] = N;
