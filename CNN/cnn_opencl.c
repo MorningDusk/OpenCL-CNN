@@ -211,6 +211,7 @@ static void convolution_layer(float* inputs, float* outputs, float* filters, flo
             output[j] = ReLU(output[j] + bias);
         }
     }
+
 }
 
 static void softmax(float* output, int N) {
@@ -378,15 +379,44 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
         float* image = images + i * 3 * 32 * 32;
 
         /* Start Convolution Layer*/
+		// convolution_layer(__global float* inputs, __global float* outputs, __global float* filters, __global float* biases, int D2, int D1, int N)
         for (j = 0; j < 5; j++) {
 
             for (h = 0; h < CONV_LAYER_NUMS[j]; h++) {
-				;
+				
+				if (h == 0) {
+					err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), image);
+					CHECK_ERROR(err);
+				} else {
+					err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
+					CHECK_ERROR(err);
+				}
+
+				err = clSetKernelArg(c_layer, 1, sizeof(cl_mem), &C[j][h]);
+				CHECK_ERROR(err);
+
+				err = clSetKernelArg(c_layer, 1, sizeof(cl_mem), &W[j][h]);
+				CHECK_ERROR(err);
+
+				err = clSetKernelArg(c_layer, 2, sizeof(cl_mem), &B[j][h]);
+				CHECK_ERROR(err);
+
+				err = clSetKernelArg(c_layer, 3, sizeof(int), CONV_LAYERS_ARGS[j][0]);
+				CHECK_ERROR(err);
+
+				err = clSetKernelArg(c_layer, 4, sizeof(int), CONV_LAYERS_ARGS[j][1]);
+				CHECK_ERROR(err);
+
+				err = clSetKernelArg(c_layer, 5, sizeof(int), CONV_LAYERS_ARGS[j][2]);
+				CHECK_ERROR(err);
+
             }
+
 
 		}
 
             /* Start Pooling Layer*/
+			// pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
 
             global_size3[0] = POOL_LAYER_SIZES[j][0]; 
 			global_size3[1] = POOL_LAYER_SIZES[j][1]; 
@@ -401,57 +431,55 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
             err = clFinish(queue);
             CHECK_ERROR(err);
-        
-
-        /* Start FC Layer */
-        // fc_layer(input, output, wegiht, bias, in, out);
-        float* w[3] = {network[26], network[28], network[30]};
-        float* b[3] = {network[27], network[29], network[31]};
-
-        for (i = 0; i < 3; i++) {
-
-
-            err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), P + 5);
-
-            if (i != 0) {
-                err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), FC + (i - 1));
-				CHECK_ERROR(err);
-			}
-
-            err = clSetKernelArg(f_layer, 1, sizeof(cl_mem), FC + i);
-            CHECK_ERROR(err);
-            err = clSetKernelArg(f_layer, 2, sizeof(cl_float), &w[i]);
-            CHECK_ERROR(err);
-            err = clSetKernelArg(f_layer, 3, sizeof(cl_float), &b[i]);
-            CHECK_ERROR(err);
-
-            int N = 512;
-            err = clSetKernelArg(f_layer, 4, sizeof(int), &N);
-            CHECK_ERROR(err);
-
-            err = clSetKernelArg(f_layer, 5, sizeof(int), FC_LAYER_SIZES + i);
-            CHECK_ERROR(err);
-
-            global_size2[0] = N;
-            global_size2[1] = FC_LAYER_SIZES[i];	
-            local_size2[0] = 64;	
-            local_size2[1] = 1;		
-
-            clEnqueueNDRangeKernel(queue, f_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);			
-            CHECK_ERROR(err);
-            err = clFinish(queue);			
-            CHECK_ERROR(err);
 
         }
 
-        err = clEnqueueReadBuffer(queue, FC[3], CL_TRUE, 0, sizeof(float) * FC_LAYER_SIZES[3], fc3, 0, NULL, NULL);
-        CHECK_ERROR(err);
+	/* Start FC Layer */
+	// fc_layer(input, output, wegiht, bias, in, out);
+	float* w[3] = { network[26], network[28], network[30] };
+	float* b[3] = { network[27], network[29], network[31] };
 
-        softmax(fc3, 10);
-        labels[i] = find_max(fc3, 10);
-        confidences[i] = fc3[labels[i]];
+	for (i = 0; i < 3; i++) {
+
+		err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), P + 5);
+
+		if (i != 0) {
+			err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), FC + (i - 1));
+			CHECK_ERROR(err);
+		}
+
+		err = clSetKernelArg(f_layer, 1, sizeof(cl_mem), FC + i);
+		CHECK_ERROR(err);
+		err = clSetKernelArg(f_layer, 2, sizeof(cl_float), &w[i]);
+		CHECK_ERROR(err);
+		err = clSetKernelArg(f_layer, 3, sizeof(cl_float), &b[i]);
+		CHECK_ERROR(err);
+
+		int N = 512;
+		err = clSetKernelArg(f_layer, 4, sizeof(int), &N);
+		CHECK_ERROR(err);
+
+		err = clSetKernelArg(f_layer, 5, sizeof(int), FC_LAYER_SIZES + i);
+		CHECK_ERROR(err);
+
+		global_size2[0] = N;
+		global_size2[1] = FC_LAYER_SIZES[i];
+		local_size2[0] = 64;
+		local_size2[1] = 1;
+
+		clEnqueueNDRangeKernel(queue, f_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
+		CHECK_ERROR(err);
+		err = clFinish(queue);
+		CHECK_ERROR(err);
 
     }
+
+	err = clEnqueueReadBuffer(queue, FC[3], CL_TRUE, 0, sizeof(float) * FC_LAYER_SIZES[3], fc3, 0, NULL, NULL);
+	CHECK_ERROR(err);
+
+	softmax(fc3, 10);
+	labels[i] = find_max(fc3, 10);
+	confidences[i] = fc3[labels[i]];
 
 	for (i = 0; i < 5; i++) {
 
