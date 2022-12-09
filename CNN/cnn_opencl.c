@@ -1,10 +1,10 @@
+#pragma warning(disable:4996)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include <CL/cl.h>
-#include "cnn.h"
 
 #define CHECK_ERROR(err) \
     if(err != CL_SUCCESS) { \
@@ -53,6 +53,89 @@ char* get_source_code(const char* file_name, size_t* len) {
     fclose(file);
 
     return source_code;
+
+}
+
+/*
+ * D2 = output channel size
+ * D1 = input channel size
+ * N = width and height of an input image
+ * input image is zero-padded by 1.
+ * Thus, input is (D1, N, N) and output is (D2, N, N)
+ */
+float* alloc_layer_sq(size_t n) {
+    return (float*)malloc(n * sizeof(float));
+}
+
+void convolution3x3(float* input, float* output, float* filter, int N) {
+    int i, j, k, l;
+    for (i = 0; i < N; i++) {
+        for (j = 0; j < N; j++) {
+            float sum = 0;
+            for (k = 0; k < 3; k++) {
+                for (l = 0; l < 3; l++) {
+                    int x = i + k - 1;
+                    int y = j + l - 1;
+                    if (x >= 0 && x < N && y >= 0 && y < N)
+                        sum += input[x * N + y] * filter[k * 3 + l];
+                }
+            }
+            output[i * N + j] += sum;
+        }
+    }
+}
+
+#define ReLU(x) (((x)>0)?(x):0)
+void convolution_layer_seq(float* inputs, float* outputs, float* filters, float* biases, int D2, int D1, int N) {
+    int i, j;
+
+    memset(outputs, 0, sizeof(float) * N * N * D2);
+
+    for (j = 0; j < D2; j++) {
+        for (i = 0; i < D1; i++) {
+            float* input = inputs + N * N * i;
+            float* output = outputs + N * N * j;
+            float* filter = filters + 3 * 3 * (j * D1 + i);
+            convolution3x3(input, output, filter, N);
+        }
+    }
+
+    for (i = 0; i < D2; i++) {
+        float* output = outputs + N * N * i;
+        float bias = biases[i];
+        for (j = 0; j < N * N; j++) {
+            output[j] = ReLU(output[j] + bias);
+        }
+    }
+
+}
+
+void softmax(float* output, int N) {
+    int i;
+    float max = output[0];
+    for (i = 1; i < N; i++) {
+        max = (output[i] > max) ? output[i] : max;
+    }
+    float sum = 0;
+    for (i = 0; i < N; i++) {
+        sum += exp(output[i] - max);
+    }
+    for (i = 0; i < N; i++) {
+        output[i] = exp(output[i] - max) / sum;
+    }
+}
+
+int find_max(float* fc, int N) {
+    int i;
+    int maxid = 0;
+    float maxval = 0;
+    for (i = 0; i < N; i++) {
+        if (maxval < fc[i]) {
+            maxval = fc[i];
+            maxid = i;
+        }
+    }
+    return maxid;
 }
 
 /*
@@ -68,6 +151,8 @@ cl_context context;
 cl_program program;
 cl_command_queue queue;
 cl_kernel c_layer, p_layer, f_layer;
+
+time_t start;
 
 void cnn_init(void) {
 
@@ -93,7 +178,7 @@ void cnn_init(void) {
     program = clCreateProgramWithSource(context, 1, (const char**)&source_code, &source_code_len, &err);
     CHECK_ERROR(err);
 
-    err = clBuildProgram(program, 1, &device, NULL, NULL, NULL);
+    err = clBuildProgram(program, 1, &device, "-cl-no-signed-zeros -cl-mad-enable -cl-unsafe-math-optimizations -cl-finite-math-only", NULL, NULL);
     CHECK_BUILD_ERROR(err);
     CHECK_ERROR(err);
 
@@ -103,10 +188,10 @@ void cnn_init(void) {
 
     p_layer = clCreateKernel(program, "pooling_layer", &err);
     CHECK_ERROR(err);
-   
+
     f_layer = clCreateKernel(program, "fc_layer", &err);
     CHECK_ERROR(err);
- 
+
 }
 
 void cnn(float* images, float** network, int* labels, float* confidences, int num_images) {
@@ -177,14 +262,14 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
     cnt = 0;
 
     // Create Weight, bias Buffer
-    float * w[5][3];
-    float * b[5][3];
+    float* weight[5][3];
+    float* bias[5][3];
 
     for (i = 0; i < 5; i++) {
         for (j = 0; j < CONV_LAYER_NUMS[i]; j++) {
 
-            w[i][j] = network[cnt];
-            b[i][j] = network[cnt++];
+            weight[i][j] = network[cnt];
+            bias[i][j] = network[cnt++];
 
             //W[i][j] = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * NETWORK_SIZES[cnt], network[cnt++], &err);
             //CHECK_ERROR(err);
@@ -195,12 +280,12 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
     }
 
     // Create Convolution Buffer
-    for (i = 0; i < 5; i++) {
-        for (j = 0; j < CONV_LAYER_NUMS[i]; j++) {
-            C[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * CONV_LAYER_SIZES[i], NULL, &err);
-            CHECK_ERROR(err);
-        }
-    }
+    //for (i = 0; i < 5; i++) {
+    //    for (j = 0; j < CONV_LAYER_NUMS[i]; j++) {
+    //        C[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * CONV_LAYER_SIZES[i], NULL, &err);
+    //        CHECK_ERROR(err);
+    //    }
+    //}
 
     // Create Pooling Buffer
     for (i = 0; i < 5; i++) {
@@ -216,10 +301,13 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
     }
 
     // Run CNN 
-    float * conv[5][3];
+    float* conv[5][3];
     for (i = 0; i < num_images; ++i) {
 
         float* image = images + i * 3 * 32 * 32;
+
+        // err = clEnqueueWriteBuffer(queue, P[0], CL_TRUE, 0, sizeof(float) * POOL_LAYER_SIZES[0][0] * POOL_LAYER_SIZES[0][1] * POOL_LAYER_SIZES[0][2], image, 0, NULL, NULL);
+        // CHECK_ERROR(err);
 
         // Start Convolution Layer
         // convolution_layer(__global float* inputs, __global float* outputs, __global float* filters, __global float* biases, int D2, int D1, int N)
@@ -227,33 +315,54 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
             for (h = 0; h < CONV_LAYER_NUMS[j]; h++) {
 
-                conv[j][h] = alloc_layer_sq(CONV_LAYER_SIZES[j]);
+                conv[j][h] = alloc_layer_sq((size_t)CONV_LAYER_SIZES[j]);
+
+                start = clock();
 
                 if (j == 0 && h == 0) {
-                    convolution_layer_seq(image, conv[j][h], w[j][h], b[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
+                    convolution_layer_seq(image, conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
                 }
                 else if (h == 0) {
-                    convolution_layer_seq(P[j - 1], conv[j][h], w[j][h], b[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
+                    convolution_layer_seq(P[j - 1], conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
                 }
                 else {
-                    convolution_layer_seq(conv[j][h - 1], conv[j][h], w[j][h], b[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
+                    convolution_layer_seq(conv[j][h - 1], conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][2]);
                 }
 
                 C[j][h] = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(float) * CONV_LAYER_SIZES[j], conv[j][h], &err);
                 CHECK_ERROR(err);
 
-                /*
-                if (j == 0 && h == 0) {
+                /*if (j == 0 && h == 0) {
                     err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), image);
                     CHECK_ERROR(err);
+
+                    err = clSetKernelArg(c_layer, 5, sizeof(int), &CONV_LAYERS_ARGS[j][1]);
+                    CHECK_ERROR(err);
+
+                    global_size = (CONV_LAYERS_ARGS[j][1] < 512 ? CONV_LAYERS_ARGS[j][1] : 256) * CONV_LAYERS_ARGS[j][2] * CONV_LAYERS_ARGS[j][2];
+                    local_size = (CONV_LAYERS_ARGS[j][1] < 512 ? CONV_LAYERS_ARGS[j][1] : 256);
+
                 }
                 else if (h == 0) {
                     err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &P[j - 1]);
                     CHECK_ERROR(err);
+
+                    err = clSetKernelArg(c_layer, 5, sizeof(int), &CONV_LAYERS_ARGS[j][1]);
+                    CHECK_ERROR(err);
+
+                    global_size = (CONV_LAYERS_ARGS[j][0] < 512 ? CONV_LAYERS_ARGS[j][0] : 256) * CONV_LAYERS_ARGS[j][2] * CONV_LAYERS_ARGS[j][2];
+                    local_size = (CONV_LAYERS_ARGS[j][0] < 512 ? CONV_LAYERS_ARGS[j][0] : 256);
+
                 }
                 else {
                     err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
                     CHECK_ERROR(err);
+
+                    err = clSetKernelArg(c_layer, 5, sizeof(int), &CONV_LAYERS_ARGS[j][0]);
+                    CHECK_ERROR(err);
+
+                    global_size = (CONV_LAYERS_ARGS[j][0] < 512 ? CONV_LAYERS_ARGS[j][0] : 256) * CONV_LAYERS_ARGS[j][2] * CONV_LAYERS_ARGS[j][2];
+                    local_size = (CONV_LAYERS_ARGS[j][0] < 512 ? CONV_LAYERS_ARGS[j][0] : 256);
 
                 }
 
@@ -266,16 +375,19 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
                 err = clSetKernelArg(c_layer, 3, sizeof(cl_mem), &B[j][h]);
                 CHECK_ERROR(err);
 
-                err = clSetKernelArg(c_layer, 4, sizeof(cl_int), &CONV_LAYERS_ARGS[j][0]);
+                err = clSetKernelArg(c_layer, 4, sizeof(int), &CONV_LAYERS_ARGS[j][0]);
                 CHECK_ERROR(err);
 
-                err = clSetKernelArg(c_layer, 5, sizeof(cl_int), &CONV_LAYERS_ARGS[j][1]);
+                err = clSetKernelArg(c_layer, 6, sizeof(int), &CONV_LAYERS_ARGS[j][2]);
                 CHECK_ERROR(err);
 
-                err = clSetKernelArg(c_layer, 6, sizeof(cl_int), &CONV_LAYERS_ARGS[j][2]);
+                clEnqueueNDRangeKernel(queue, c_layer, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
                 CHECK_ERROR(err);
-                */
 
+                err = clFinish(queue);
+                CHECK_ERROR(err);*/
+
+                printf("image%d [%d][%d] time : %lf\n", i, j, h, (clock() - start) / (double)CLOCKS_PER_SEC);
             }
 
 
@@ -283,6 +395,17 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
         // Start Pooling Layer
         // pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
+
+        err = clSetKernelArg(p_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
+        CHECK_ERROR(err);
+        err = clSetKernelArg(p_layer, 1, sizeof(cl_mem), P + j);
+        CHECK_ERROR(err);
+        err = clSetKernelArg(p_layer, 2, sizeof(int), &POOL_LAYER_SIZES[j][1]);
+        CHECK_ERROR(err);
+
+        int Nsquare = POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][1];
+        err = clSetKernelArg(p_layer, 3, sizeof(int), &Nsquare);
+        CHECK_ERROR(err);
 
         global_size3[0] = POOL_LAYER_SIZES[j][0];
         global_size3[1] = POOL_LAYER_SIZES[j][1];
@@ -374,86 +497,4 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
     free(device);
     free(platform);
-}
-
-/*
- * D2 = output channel size
- * D1 = input channel size
- * N = width and height of an input image
- * input image is zero-padded by 1.
- * Thus, input is (D1, N, N) and output is (D2, N, N)
- */
-float* alloc_layer_sq(size_t n) {
-    return (float*)malloc(n * sizeof(float));
-}
-
-static void convolution3x3(float* input, float* output, float* filter, int N) {
-    int i, j, k, l;
-    for (i = 0; i < N; i++) {
-        for (j = 0; j < N; j++) {
-            float sum = 0;
-            for (k = 0; k < 3; k++) {
-                for (l = 0; l < 3; l++) {
-                    int x = i + k - 1;
-                    int y = j + l - 1;
-                    if (x >= 0 && x < N && y >= 0 && y < N)
-                        sum += input[x * N + y] * filter[k * 3 + l];
-                }
-            }
-            output[i * N + j] += sum;
-        }
-    }
-}
-
-
-static void convolution_layer_seq(float* inputs, float* outputs, float* filters, float* biases, int D2, int D1, int N) {
-    int i, j;
-
-    memset(outputs, 0, sizeof(float) * N * N * D2);
-
-    for (j = 0; j < D2; j++) {
-        for (i = 0; i < D1; i++) {
-            float* input = inputs + N * N * i;
-            float* output = outputs + N * N * j;
-            float* filter = filters + 3 * 3 * (j * D1 + i);
-            convolution3x3(input, output, filter, N);
-        }
-    }
-
-    for (i = 0; i < D2; i++) {
-        float* output = outputs + N * N * i;
-        float bias = biases[i];
-        for (j = 0; j < N * N; j++) {
-            output[j] = ReLU(output[j] + bias);
-        }
-    }
-
-}
-
-static void softmax(float* output, int N) {
-    int i;
-    float max = output[0];
-    for (i = 1; i < N; i++) {
-        max = (output[i] > max) ? output[i] : max;
-    }
-    float sum = 0;
-    for (i = 0; i < N; i++) {
-        sum += exp(output[i] - max);
-    }
-    for (i = 0; i < N; i++) {
-        output[i] = exp(output[i] - max) / sum;
-    }
-}
-
-static int find_max(float* fc, int N) {
-    int i;
-    int maxid = 0;
-    float maxval = 0;
-    for (i = 0; i < N; i++) {
-        if (maxval < fc[i]) {
-            maxval = fc[i];
-            maxid = i;
-        }
-    }
-    return maxid;
 }
