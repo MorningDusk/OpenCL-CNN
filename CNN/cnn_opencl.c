@@ -280,12 +280,12 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
     }
 
     // Create Convolution Buffer
-    //for (i = 0; i < 5; i++) {
-    //    for (j = 0; j < CONV_LAYER_NUMS[i]; j++) {
-    //        C[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * CONV_LAYER_SIZES[i], NULL, &err);
-    //        CHECK_ERROR(err);
-    //    }
-    //}
+    for (i = 0; i < 5; i++) {
+        for (j = 0; j < CONV_LAYER_NUMS[i]; j++) {
+            C[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * CONV_LAYER_SIZES[i], NULL, &err);
+            CHECK_ERROR(err);
+        }
+    }
 
     // Create Pooling Buffer
     for (i = 0; i < 5; i++) {
@@ -302,6 +302,7 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
     // Run CNN 
     float* conv[5][3];
+    float* p[5];
     for (i = 0; i < num_images; ++i) {
 
         float* image = images + i * 3 * 32 * 32;
@@ -317,20 +318,20 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
                 conv[j][h] = alloc_layer_sq((size_t)CONV_LAYER_SIZES[j]);
 
-                start = clock();
-
                 if (j == 0 && h == 0) {
                     convolution_layer_seq(image, conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
                 }
                 else if (h == 0) {
-                    convolution_layer_seq(P[j - 1], conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
+                    convolution_layer_seq(p[j - 1], conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
                 }
                 else {
                     convolution_layer_seq(conv[j][h - 1], conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][2]);
                 }
 
-                C[j][h] = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(float) * CONV_LAYER_SIZES[j], conv[j][h], &err);
+                err = clEnqueueWriteBuffer(queue, C[j][h], CL_FALSE, 0, sizeof(float)* CONV_LAYER_SIZES[j], conv[j][h], 0, NULL, NULL);
                 CHECK_ERROR(err);
+                // C[j][h] = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(float) * CONV_LAYER_SIZES[j], conv[j][h], &err);
+                
 
                 /*if (j == 0 && h == 0) {
                     err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), image);
@@ -387,39 +388,47 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
                 err = clFinish(queue);
                 CHECK_ERROR(err);*/
 
-                printf("image%d [%d][%d] time : %lf\n", i, j, h, (clock() - start) / (double)CLOCKS_PER_SEC);
+                //printf("image%d [%d][%d] time : %lf\n", i, j, h, (clock() - start) / (double)CLOCKS_PER_SEC);
             }
 
+            
+            // Start Pooling Layer
+            // pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
+            // printf("====Excute Pooling Max====\n");
+            p[j] = alloc_layer_sq((size_t)POOL_LAYER_SIZES[j][0] * POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][2]);
+
+            err = clSetKernelArg(p_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
+            CHECK_ERROR(err);
+            err = clSetKernelArg(p_layer, 1, sizeof(cl_mem), P + j);
+            CHECK_ERROR(err);
+            err = clSetKernelArg(p_layer, 2, sizeof(int), &POOL_LAYER_SIZES[j][1]);
+            CHECK_ERROR(err);
+
+            int Nsquare = POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][1];
+            err = clSetKernelArg(p_layer, 3, sizeof(int), &Nsquare);
+            CHECK_ERROR(err);
+
+            global_size3[0] = POOL_LAYER_SIZES[j][0];
+            global_size3[1] = POOL_LAYER_SIZES[j][1];
+            global_size3[2] = POOL_LAYER_SIZES[j][2];
+
+            local_size3[0] = 4;
+            local_size3[1] = 4;
+            local_size3[2] = 4;
+
+            start = clock();
+            clEnqueueNDRangeKernel(queue, p_layer, 3, NULL, global_size3, local_size3, 0, NULL, NULL);
+            CHECK_ERROR(err);
+
+            err = clEnqueueReadBuffer(queue, P[j], CL_FALSE, 0, sizeof(float) * POOL_LAYER_SIZES[j][0] * POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][2],
+                p[j], 0, NULL, NULL);
+            CHECK_ERROR(err);
+
+            err = clFinish(queue);
+            CHECK_ERROR(err);
+            // printf("time : %lf\n", (clock() - start) / (double)CLOCKS_PER_SEC);
 
         }
-
-        // Start Pooling Layer
-        // pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
-
-        err = clSetKernelArg(p_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
-        CHECK_ERROR(err);
-        err = clSetKernelArg(p_layer, 1, sizeof(cl_mem), P + j);
-        CHECK_ERROR(err);
-        err = clSetKernelArg(p_layer, 2, sizeof(int), &POOL_LAYER_SIZES[j][1]);
-        CHECK_ERROR(err);
-
-        int Nsquare = POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][1];
-        err = clSetKernelArg(p_layer, 3, sizeof(int), &Nsquare);
-        CHECK_ERROR(err);
-
-        global_size3[0] = POOL_LAYER_SIZES[j][0];
-        global_size3[1] = POOL_LAYER_SIZES[j][1];
-        global_size3[2] = POOL_LAYER_SIZES[j][2];
-
-        local_size3[0] = 4;
-        local_size3[1] = 4;
-        local_size3[2] = 4;
-
-        clEnqueueNDRangeKernel(queue, p_layer, 3, NULL, global_size3, local_size3, 0, NULL, NULL);
-        CHECK_ERROR(err);
-
-        err = clFinish(queue);
-        CHECK_ERROR(err);
 
     }
 
