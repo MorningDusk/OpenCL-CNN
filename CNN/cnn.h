@@ -6,7 +6,9 @@
 extern const int NETWORK_SIZES[];
 
 void cnn_init(void);
-void cnn(float* images, float** network, int* labels, float* confidences, int num_images);
+// void cnn(float* images, float** network, int* labels, float* confidences, int num_images);
+void cnn(float* images, float* network, int* labels, float* confidences, int num_images);
+
 
 // static void pooling2x2(float* input, float* output, int N);
 // static void pooling_layer(float* inputs, float* outputs, int D, int N);

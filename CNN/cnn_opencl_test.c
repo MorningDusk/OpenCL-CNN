@@ -1,10 +1,10 @@
+#pragma warning(disable:4996)
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
 #include <time.h>
 #include <CL/cl.h>
-#include "cnn.h"
 
 #define CHECK_ERROR(err) \
     if(err != CL_SUCCESS) { \
@@ -22,324 +22,7 @@
         free(log); \
     }
 
-/*
- * TODO
- * Define global variables here. For example,
- * cl_platform_id platform;
- */
-
-cl_int err;					// Variable for Error check 
-cl_platform_id platform;	// Platform ID
-cl_device_id device;		// Device ID
-cl_context context;
-cl_program program;
-cl_command_queue queue;
-cl_kernel c_layer, p_layer, f_layer;
-
-cl_command_queue* creat_queue(int count)
-{
-    cl_int err = 0;
-    cl_command_queue* queue = (cl_command_queue*)malloc(sizeof(cl_command_queue) * count);
-    for (int i = 0; i < count; i++) {
-        queue[i] = clCreateCommandQueue(context, device, 0, &err);
-        CHECK_ERROR(err);
-    }
-
-    return queue;
-}
-
-void creat_program(void)
-{
-    cl_int err;
-    size_t source_code_len;
-    char* source_code = get_source_code("kernel.cl", &source_code_len);
-    program = clCreateProgramWithSource(context, 1, (const char**)&source_code, &source_code_len, &err);
-    CHECK_ERROR(err);
-}
-
-void build_program(void)
-{
-    cl_int err;
-    err = clBuildProgram(program, 1, &device, "", NULL, NULL);
-    CHECK_BUILD_ERROR(err);
-    CHECK_ERROR(err);
-}
-
-cl_kernel creat_kernel(const char* kernel_name)
-{
-    cl_int err;
-    cl_kernel kernel = clCreateKernel(program, kernel_name, &err);
-    CHECK_ERROR(err);
-
-    return kernel;
-}
-
-static void pl_make_buffers(cl_kernel kernel, cl_command_queue* queue, float* inputs, float* outputs, cl_mem* input_result,
-    cl_mem* output_result, int D, int N)
-{
-    cl_int err;
-
-    size_t size = sizeof(float) * D * N * N;
-
-    // This should be removed after the completion of Convolution OpenCL Porting
-    *input_result = clCreateBuffer(context, CL_MEM_READ_WRITE, size, NULL, &err);
-    CHECK_ERROR(err);
-
-    clEnqueueWriteBuffer(*queue, *input_result, CL_FALSE, 0, size, NULL, 0, NULL, NULL);
-    CHECK_ERROR(err);
-    clFinish(*queue);
-
-    *output_result = clCreateBuffer(context, CL_MEM_READ_WRITE, size / 4, NULL, &err);
-    CHECK_ERROR(err);
-}
-
-// Temporary function
-static void pl_get_result(cl_command_queue* queue, cl_mem* result, float* output, int D, int N)
-{
-    cl_int err = clEnqueueReadBuffer(*queue, *result, CL_FALSE, 0, (sizeof(float) * N * N * D) / 4,
-        output, 0, NULL, NULL);
-    CHECK_ERROR(err);
-
-    clFinish(*queue);
-}
-
-static void pooling_layer(cl_command_queue* queue, int queue_count, cl_kernel kernel, cl_mem* inputs, cl_mem* outputs, int D, int N)
-{
-    // Set kernel arguments
-    cl_int err;
-    int size = N * N;
-
-    err = clSetKernelArg(kernel, 0, sizeof(cl_mem), inputs);
-    CHECK_ERROR(err);
-
-    err = clSetKernelArg(kernel, 1, sizeof(cl_mem), outputs);
-    CHECK_ERROR(err);
-
-    err = clSetKernelArg(kernel, 2, sizeof(cl_int), &N);
-    CHECK_ERROR(err);
-
-    err = clSetKernelArg(kernel, 3, sizeof(cl_int), &size);
-    CHECK_ERROR(err);
-
-    size_t global_size[3] = { D, N, N };
-    size_t local_size[3] = { 4, 4, 4 };
-
-    err = clEnqueueNDRangeKernel(*queue, kernel, 3, NULL, global_size, local_size,
-        0, NULL, NULL);
-    CHECK_ERROR(err);
-
-    clFinish(*queue);
-    clReleaseMemObject(*inputs);
-}
-
-static void convolution3x3(float* input, float* output, float* filter, int N) {
-    int i, j, k, l;
-    for (i = 0; i < N; i++) {
-        for (j = 0; j < N; j++) {
-            float sum = 0;
-            for (k = 0; k < 3; k++) {
-                for (l = 0; l < 3; l++) {
-                    int x = i + k - 1;
-                    int y = j + l - 1;
-                    if (x >= 0 && x < N && y >= 0 && y < N)
-                        sum += input[x * N + y] * filter[k * 3 + l];
-                }
-            }
-            output[i * N + j] += sum;
-        }
-    }
-}
-
-/*
- * D2 = output channel size
- * D1 = input channel size
- * N = width and height of an input image
- * input image is zero-padded by 1.
- * Thus, input is (D1, N, N) and output is (D2, N, N)
- */
-static void convolution_layer(float* inputs, float* outputs, float* filters, float* biases, int D2, int D1, int N) {
-    int i, j;
-
-    memset(outputs, 0, sizeof(float) * N * N * D2);
-
-    for (j = 0; j < D2; j++) {
-        for (i = 0; i < D1; i++) {
-            float* input = inputs + N * N * i;
-            float* output = outputs + N * N * j;
-            float* filter = filters + 3 * 3 * (j * D1 + i);
-            convolution3x3(input, output, filter, N);
-        }
-    }
-
-    for (i = 0; i < D2; i++) {
-        float* output = outputs + N * N * i;
-        float bias = biases[i];
-        for (j = 0; j < N * N; j++) {
-            output[j] = ReLU(output[j] + bias);
-        }
-    }
-
-}
-
-void cnn_init(void) {
-
-    /* GET DEVICE INFO */
-    err = clGetPlatformIDs(1, &platform, NULL);
-    CHECK_ERROR(err);
-
-    err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device, NULL);
-    CHECK_ERROR(err);
-
-    /* CREATE CONTEXT */
-    context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
-    CHECK_ERROR(err);
-
-    /* CREATE QUEUE */
-    queue = clCreateCommandQueueWithProperties(context, device, 0, &err);
-    CHECK_ERROR(err);
-
-    /* CREATE PROGRAM */
-    creat_program();
-    err = clBuildProgram(program, 1, &device, NULL, NULL, NULL);
-    CHECK_BUILD_ERROR(err);
-    CHECK_ERROR(err);
-
-    /* CREATE KERNEL*/
-    c_layer = creat_kernel("convolution_layer");
-    p_layer = creat_kernel("pooling_layer");
-    f_layer = creat_kernel("fc_layer");
-
-}
-
-
-void cnn(float* images, float** network, int* labels, float* confidences, int num_images) {
-    // slice the network into weights and biases
-    float* w1_1, * b1_1, * w1_2, * b1_2;
-    float* w2_1, * b2_1, * w2_2, * b2_2;
-    float* w3_1, * b3_1, * w3_2, * b3_2, * w3_3, * b3_3;
-    float* w4_1, * b4_1, * w4_2, * b4_2, * w4_3, * b4_3;
-    float* w5_1, * b5_1, * w5_2, * b5_2, * w5_3, * b5_3;
-    float* w1, * b1, * w2, * b2, * w3, * b3;
-    w1_1 = network[0]; b1_1 = network[1];
-    w1_2 = network[2]; b1_2 = network[3];
-    w2_1 = network[4]; b2_1 = network[5];
-    w2_2 = network[6]; b2_2 = network[7];
-    w3_1 = network[8]; b3_1 = network[9];
-    w3_2 = network[10]; b3_2 = network[11];
-    w3_3 = network[12]; b3_3 = network[13];
-    w4_1 = network[14]; b4_1 = network[15];
-    w4_2 = network[16]; b4_2 = network[17];
-    w4_3 = network[18]; b4_3 = network[19];
-    w5_1 = network[20]; b5_1 = network[21];
-    w5_2 = network[22]; b5_2 = network[23];
-    w5_3 = network[24]; b5_3 = network[25];
-    w1 = network[26]; b1 = network[27];
-    w2 = network[28]; b2 = network[29];
-    w3 = network[30]; b3 = network[31];
-
-    // allocate memory for output of each layer
-    float* c1_1, * c1_2, * p1;
-    float* c2_1, * c2_2, * p2;
-    float* c3_1, * c3_2, * c3_3, * p3;
-    float* c4_1, * c4_2, * c4_3, * p4;
-    float* c5_1, * c5_2, * c5_3, * p5;
-    float* fc1, * fc2, * fc3;
-    c1_1 = alloc_layer(64 * 32 * 32);
-    c1_2 = alloc_layer(64 * 32 * 32);
-    p1 = alloc_layer(64 * 16 * 16);
-    c2_1 = alloc_layer(128 * 16 * 16);
-    c2_2 = alloc_layer(128 * 16 * 16);
-    p2 = alloc_layer(128 * 8 * 8);
-    c3_1 = alloc_layer(256 * 8 * 8);
-    c3_2 = alloc_layer(256 * 8 * 8);
-    c3_3 = alloc_layer(256 * 8 * 8);
-    p3 = alloc_layer(256 * 4 * 4);
-    c4_1 = alloc_layer(512 * 4 * 4);
-    c4_2 = alloc_layer(512 * 4 * 4);
-    c4_3 = alloc_layer(512 * 4 * 4);
-    p4 = alloc_layer(512 * 2 * 2);
-    c5_1 = alloc_layer(512 * 2 * 2);
-    c5_2 = alloc_layer(512 * 2 * 2);
-    c5_3 = alloc_layer(512 * 2 * 2);
-    p5 = alloc_layer(512 * 1 * 1);
-    fc1 = alloc_layer(512);
-    fc2 = alloc_layer(512);
-    fc3 = alloc_layer(10);
-
-    // Make the host ready to use OpenCL
-
-    cl_command_queue* queue = creat_queue(1);
-    cl_kernel pl_kernel = creat_kernel("pooling_layer");
-
-    cl_mem pl_input, pl_output;
-
-    // run network
-    for (int i = 0; i < num_images; ++i)
-    {
-        float* image = images + i * 3 * 32 * 32;
-
-        convolution_layer(image, c1_1, w1_1, b1_1, 64, 3, 32);
-        convolution_layer(c1_1, c1_2, w1_2, b1_2, 64, 64, 32);
-
-        // pooling_layer(c1_2, p1, 64, 16);
-        pl_make_buffers(pl_kernel, queue, c1_2, p1, &pl_input, &pl_output, 64, 16);
-        pooling_layer(queue, 1, pl_kernel, &pl_input, &pl_output, 64, 16);
-        pl_get_result(queue, &pl_output, p1, 64, 16);
-
-        convolution_layer(p1, c2_1, w2_1, b2_1, 128, 64, 16);
-        convolution_layer(c2_1, c2_2, w2_2, b2_2, 128, 128, 16);
-
-        // pooling_layer(c2_2, p2, 128, 8);
-        pl_make_buffers(pl_kernel, queue, c2_2, p2, &pl_input, &pl_output, 128, 8);
-        pooling_layer(queue, 1, pl_kernel, &pl_input, &pl_output, 128, 8);
-        pl_get_result(queue, &pl_output, p2, 128, 8);
-        
-        convolution_layer(p2, c3_1, w3_1, b3_1, 256, 128, 8);
-        convolution_layer(c3_1, c3_2, w3_2, b3_2, 256, 256, 8);
-        convolution_layer(c3_2, c3_3, w3_3, b3_3, 256, 256, 8);
-
-        // pooling_layer(c3_3, p3, 256, 4);
-        pl_make_buffers(pl_kernel, queue, c3_3, p3, &pl_input, &pl_output, 256, 4);
-        pooling_layer(queue, 1, pl_kernel, &pl_input, &pl_output, 256, 4);
-        pl_get_result(queue, &pl_output, p3, 256, 4);
-
-        convolution_layer(p3, c4_1, w4_1, b4_1, 512, 256, 4);
-        convolution_layer(c4_1, c4_2, w4_2, b4_2, 512, 512, 4);
-        convolution_layer(c4_2, c4_3, w4_3, b4_3, 512, 512, 4);
-
-        // pooling_layer(c4_3, p4, 512, 2);
-        pl_make_buffers(pl_kernel, queue, c4_3, p4, &pl_input, &pl_output, 512, 2);
-        pooling_layer(queue, 1, pl_kernel, &pl_input, &pl_output, 512, 2);
-        pl_get_result(queue, &pl_output, p4, 512, 2);
-
-        convolution_layer(p4, c5_1, w5_1, b5_1, 512, 512, 2);
-        convolution_layer(c5_1, c5_2, w5_2, b5_2, 512, 512, 2);
-        convolution_layer(c5_2, c5_3, w5_3, b5_3, 512, 512, 2);
-
-        // pooling_layer(c5_3, p5, 512, 1);
-        pl_make_buffers(pl_kernel, queue, c5_3, p5, &pl_input, &pl_output, 512, 1);
-        pooling_layer(queue, 1, pl_kernel, &pl_input, &pl_output, 512, 1);
-        pl_get_result(queue, &pl_output, p5, 512, 1);
-
-        fc_layer(p5, fc1, w1, b1, 512, 512);
-        fc_layer(fc1, fc2, w2, b2, 512, 512);
-        fc_layer(fc2, fc3, w3, b3, 10, 512);
-
-        softmax(fc3, 10);
-
-        labels[i] = find_max(fc3, 10);
-        confidences[i] = fc3[labels[i]];
-    }
-
-    free(c1_1); free(c1_2); free(p1);
-    free(c2_1); free(c2_2); free(p2);
-    free(c3_1); free(c3_2); free(c3_3); free(p3);
-    free(c4_1); free(c4_2); free(c4_3); free(p4);
-    free(c5_1); free(c5_2); free(c5_3); free(p5);
-    free(fc1); free(fc2); free(fc3);
-}
-
-char* get_source_code(const char* file_name, size_t* len) {
+    char* get_source_code(const char* file_name, size_t * len) {
     char* source_code;
     char buf[2] = "\0";
     int cnt = 0;
@@ -370,10 +53,61 @@ char* get_source_code(const char* file_name, size_t* len) {
     fclose(file);
 
     return source_code;
+
 }
 
+/*
+ * D2 = output channel size
+ * D1 = input channel size
+ * N = width and height of an input image
+ * input image is zero-padded by 1.
+ * Thus, input is (D1, N, N) and output is (D2, N, N)
+ */
+float* alloc_layer_sq(size_t n) {
+    return (float*)malloc(n * sizeof(float));
+}
 
-static void softmax(float* output, int N) {
+#define ReLU(x) (((x)>0)?(x):0)
+void convolution_layer_seq(float* inputs, float* outputs, float* filters, float* biases, int D2, int D1, int N) {
+
+    int i, j, k, l;
+
+    memset(outputs, 0, sizeof(float) * N * N * D2);
+
+    for (j = 0; j < D2; j++) {
+        for (i = 0; i < D1; i++) {
+            float* input = inputs + N * N * i;
+            float* output = outputs + N * N * j;
+            float* filter = filters + 3 * 3 * (j * D1 + i);
+
+            for (int i = 0; i < N; i++) {
+                for (int j = 0; j < N; j++) {
+                    float sum = 0;
+                    for (k = 0; k < 3; k++) {
+                        for (l = 0; l < 3; l++) {
+                            int x = i + k - 1;
+                            int y = j + l - 1;
+                            if (x >= 0 && x < N && y >= 0 && y < N)
+                                sum += input[x * N + y] * filter[k * 3 + l];
+                        }
+                    }
+                    output[i * N + j] += sum;
+                }
+            }
+        }
+    }
+
+    for (i = 0; i < D2; i++) {
+        float* output = outputs + N * N * i;
+        float bias = biases[i];
+        for (j = 0; j < N * N; j++) {
+            output[j] = ReLU(output[j] + bias);
+        }
+    }
+
+}
+
+void softmax(float* output, int N) {
     int i;
     float max = output[0];
     for (i = 1; i < N; i++) {
@@ -388,7 +122,7 @@ static void softmax(float* output, int N) {
     }
 }
 
-static int find_max(float* fc, int N) {
+int find_max(float* fc, int N) {
     int i;
     int maxid = 0;
     float maxval = 0;
@@ -402,6 +136,61 @@ static int find_max(float* fc, int N) {
 }
 
 /*
+ * TODO
+ * Define global variables here. For example,
+ * cl_platform_id platform;
+ */
+
+cl_int err;					// Variable for Error check 
+cl_platform_id platform;	// Platform ID
+cl_device_id device;		// Device ID
+cl_context context;
+cl_program program;
+cl_command_queue queue;
+cl_kernel c_layer, p_layer, f_layer;
+
+time_t start;
+
+void cnn_init(void) {
+
+    /* GET DEVICE INFO */
+    err = clGetPlatformIDs(1, &platform, NULL);
+    CHECK_ERROR(err);
+
+    err = clGetDeviceIDs(platform, CL_DEVICE_TYPE_GPU, 1, &device, NULL);
+    CHECK_ERROR(err);
+
+    /* CREATE CONTEXT */
+    context = clCreateContext(NULL, 1, &device, NULL, NULL, &err);
+    CHECK_ERROR(err);
+
+    /* CREATE QUEUE */
+    queue = clCreateCommandQueueWithProperties(context, device, 0, &err);
+    CHECK_ERROR(err);
+
+    /* CREATE PROGRAM */
+    size_t source_code_len;
+    char* source_code = get_source_code("kernel.cl", &source_code_len);
+
+    program = clCreateProgramWithSource(context, 1, (const char**)&source_code, &source_code_len, &err);
+    CHECK_ERROR(err);
+
+    err = clBuildProgram(program, 1, &device, "-cl-no-signed-zeros -cl-mad-enable -cl-unsafe-math-optimizations -cl-finite-math-only", NULL, NULL);
+    CHECK_BUILD_ERROR(err);
+    CHECK_ERROR(err);
+
+    /* CREATE KERNEL*/
+    c_layer = clCreateKernel(program, "convolution_layer", &err);
+    CHECK_ERROR(err);
+
+    p_layer = clCreateKernel(program, "pooling_layer", &err);
+    CHECK_ERROR(err);
+
+    f_layer = clCreateKernel(program, "fc_layer", &err);
+    CHECK_ERROR(err);
+
+}
+
 void cnn(float* images, float** network, int* labels, float* confidences, int num_images) {
 
     int i, j, h, cnt;
@@ -411,7 +200,6 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
     const int NETWORK_SIZES[] = {
     64 * 3 * 3 * 3, 64,
     64 * 64 * 3 * 3, 64,
-    128 * 64 * 3 * 3, 128,
     128 * 128 * 3 * 3, 128,
     256 * 128 * 3 * 3, 256,
     256 * 256 * 3 * 3, 256,
@@ -435,7 +223,7 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
         512 * 2 * 2
     };
 
-    const int CONV_LAYERS_ARGS[5][3] = {
+    const int CONV_LAYERS_ARGS[5][3] = { // D2, D1, N
         { 64, 3, 32 },
         { 128, 64, 16 },
         { 256, 128, 8 },
@@ -443,7 +231,7 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
         { 512, 512, 2 }
     };
 
-    const int POOL_LAYER_SIZES[5][3] = {
+    const int POOL_LAYER_SIZES[5][3] = { // DIM, N, N
         { 64, 16, 16 },
         { 128, 8, 8 },
         { 256, 4, 4 },
@@ -462,24 +250,72 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
     size_t global_size, global_size2[2], global_size3[3];
     size_t local_size, local_size2[2], local_size3[3];
 
+    
     cl_mem W[5][3], B[5][3];
+    cl_mem w[3], b[3];
     cl_mem C[5][3];
     cl_mem P[5];
     cl_mem FC[3];
 
+    // Create Weight, bias Buffer
+    
+    float * temp = alloc_layer_sq(NETWORK_SIZES[0]);
     cnt = 0;
-
-    // Create Weight, bias Buffer 
+    /*
     for (i = 0; i < 5; i++) {
         for (j = 0; j < CONV_LAYER_NUMS[i]; j++) {
-            W[i][j] = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * NETWORK_SIZES[cnt], network[cnt++], &err);
+
+            W[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * NETWORK_SIZES[cnt], NULL, &err);
+            CHECK_ERROR(err); 
+            err = clEnqueueWriteBuffer(queue, W[i][j], CL_TRUE, offset, sizeof(float) * NETWORK_SIZES[cnt], network, 0, NULL, NULL);
             CHECK_ERROR(err);
-            B[i][j] = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, sizeof(float) * NETWORK_SIZES[cnt], network[cnt++], &err);
+            
+            offset += NETWORK_SIZES[cnt++];
+            err = clEnqueueReadBuffer(queue, W[0][0], CL_TRUE, 0, sizeof(float) * NETWORK_SIZES[0], temp, 0, NULL, NULL);
             CHECK_ERROR(err);
+
+
+            B[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(network[cnt]), NULL, &err);
+            CHECK_ERROR(err);
+            err = clEnqueueWriteBuffer(queue, B[i][j], CL_TRUE, offset, sizeof(float) * NETWORK_SIZES[cnt], network, 0, NULL, NULL);
+            CHECK_ERROR(err);
+
+            offset += NETWORK_SIZES[cnt++];
+
         }
     }
+    
 
-    // Create Convolution Buffer 
+    for (int i = 0; i < 100; i++) {
+        printf(" %.6f", network[i]);
+    }
+    putchar('\n');
+    printf("================================\n");
+    
+    for (int i = 0; i < 100; i++) {
+        printf(" %.6f", temp[i]);
+    }
+    
+
+    //exit(0);
+
+    // Create buffers for filters
+    for (i = 0; i < 3; i++) {
+
+        w[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(network[cnt]), NULL, &err);
+        CHECK_ERROR(err);
+        err = clEnqueueWriteBuffer(queue, w[i], CL_TRUE, 0, sizeof(network[cnt]), network[cnt++], 0, NULL, NULL);
+        CHECK_ERROR(err);
+        b[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(network[cnt]), NULL, &err);
+        CHECK_ERROR(err);
+         err = clEnqueueWriteBuffer(queue, b[i], CL_TRUE, 0, sizeof(network[cnt]), network[cnt++], 0, NULL, NULL);
+        CHECK_ERROR(err);
+
+    }
+*/
+
+
+    // Create Convolution Buffer
     for (i = 0; i < 5; i++) {
         for (j = 0; j < CONV_LAYER_NUMS[i]; j++) {
             C[i][j] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * CONV_LAYER_SIZES[i], NULL, &err);
@@ -487,42 +323,94 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
         }
     }
 
-    // Create Pooling Buffer 
+    // Create Pooling Buffer
     for (i = 0; i < 5; i++) {
         P[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * POOL_LAYER_SIZES[i][0] *
             POOL_LAYER_SIZES[i][1] * POOL_LAYER_SIZES[i][2], NULL, &err);
         CHECK_ERROR(err);
     }
 
-    // Create FC layer Buffer 
+    // Create FC layer Buffer
     for (i = 0; i < 3; i++) {
         FC[i] = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * FC_LAYER_SIZES[i], NULL, &err);
         CHECK_ERROR(err);
     }
 
     // Run CNN 
+    cl_mem imageBuffer;
+
+    imageBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * 3 * 3 * 32, NULL, &err);
+    CHECK_ERROR(err);
+
+    float * conv;
+    float* p[5];
+
+    cnt = 0;
     for (i = 0; i < num_images; ++i) {
 
         float* image = images + i * 3 * 32 * 32;
 
+        err = clEnqueueWriteBuffer(queue, imageBuffer, CL_TRUE, 0, sizeof(float) * 3 * 3 * 32, image, 0, NULL, NULL);
+        CHECK_ERROR(err);
+
         // Start Convolution Layer
-        // convolution_layer(__global float* inputs, __global float* outputs, __global float* filters, __global float* biases, int D2, int D1, int N)
         for (j = 0; j < 5; j++) {
-
+        
             for (h = 0; h < CONV_LAYER_NUMS[j]; h++) {
+                start = clock();
+                //conv = alloc_layer_sq((size_t)CONV_LAYER_SIZES[0]);
 
+                /*
                 if (j == 0 && h == 0) {
-                    err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), image);
+                    convolution_layer_seq(image, conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
+                }
+                else if (h == 0) {
+                    convolution_layer_seq(p[j - 1], conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][1], CONV_LAYERS_ARGS[j][2]);
+                }
+                else {
+                    convolution_layer_seq(conv[j][h - 1], conv[j][h], weight[j][h], bias[j][h], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][0], CONV_LAYERS_ARGS[j][2]);
+                }
+
+                */
+                //err = clEnqueueWriteBuffer(queue, C[j][h], CL_FALSE, 0, sizeof(float)* CONV_LAYER_SIZES[j], conv[j][h], 0, NULL, NULL);
+                //CHECK_ERROR(err);
+                // C[j][h] = clCreateBuffer(context, CL_MEM_READ_WRITE | CL_MEM_COPY_HOST_PTR, sizeof(float) * CONV_LAYER_SIZES[j], conv[j][h], &err);
+
+
+                // convolution_layer
+                // inputs, outputs, N, filterOffset, biasoffset int D2, int D1, int N, int Nsquare
+                // input = N * N * inDim
+                if (j == 0 && h == 0) {
+                    err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &imageBuffer);
                     CHECK_ERROR(err);
+
+                    err = clSetKernelArg(c_layer, 6, sizeof(int), &CONV_LAYERS_ARGS[j][1]);
+                    CHECK_ERROR(err);
+
+                    global_size = CONV_LAYERS_ARGS[j][1] * CONV_LAYERS_ARGS[j][2] * CONV_LAYERS_ARGS[j][2];
+                    local_size = CONV_LAYERS_ARGS[j][1];
+
                 }
                 else if (h == 0) {
                     err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &P[j - 1]);
                     CHECK_ERROR(err);
+
+                    err = clSetKernelArg(c_layer, 6, sizeof(int), &CONV_LAYERS_ARGS[j][1]);
+                    CHECK_ERROR(err);
+
+                    global_size = CONV_LAYERS_ARGS[j][0] * CONV_LAYERS_ARGS[j][2] * CONV_LAYERS_ARGS[j][2];
+                    local_size = CONV_LAYERS_ARGS[j][0];
+
                 }
                 else {
                     err = clSetKernelArg(c_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
                     CHECK_ERROR(err);
 
+                    err = clSetKernelArg(c_layer, 6, sizeof(int), &CONV_LAYERS_ARGS[j][0]);
+                    CHECK_ERROR(err);
+
+                    global_size = CONV_LAYERS_ARGS[j][0] * CONV_LAYERS_ARGS[j][2] * CONV_LAYERS_ARGS[j][2];
+                    local_size = CONV_LAYERS_ARGS[j][0];
                 }
 
                 err = clSetKernelArg(c_layer, 1, sizeof(cl_mem), &C[j][h]);
@@ -531,91 +419,120 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
                 err = clSetKernelArg(c_layer, 2, sizeof(cl_mem), &W[j][h]);
                 CHECK_ERROR(err);
 
-                err = clSetKernelArg(c_layer, 3, sizeof(cl_mem), &B[j][h]);
+                err = clSetKernelArg(c_layer, 5, sizeof(int), &CONV_LAYERS_ARGS[j][0]);
                 CHECK_ERROR(err);
 
-                err = clSetKernelArg(c_layer, 4, sizeof(cl_int), &CONV_LAYERS_ARGS[j][0]);
+                err = clSetKernelArg(c_layer, 7, sizeof(int), &CONV_LAYERS_ARGS[j][2]);
                 CHECK_ERROR(err);
 
-                err = clSetKernelArg(c_layer, 5, sizeof(cl_int), &CONV_LAYERS_ARGS[j][1]);
+                int Nsquare = CONV_LAYERS_ARGS[j][2] * CONV_LAYERS_ARGS[j][2];
+                err = clSetKernelArg(c_layer, 8, sizeof(int), &Nsquare);
                 CHECK_ERROR(err);
 
-                err = clSetKernelArg(c_layer, 6, sizeof(cl_int), &CONV_LAYERS_ARGS[j][2]);
+                clEnqueueNDRangeKernel(queue, c_layer, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
                 CHECK_ERROR(err);
 
+                err = clFinish(queue);
+                CHECK_ERROR(err);
 
+                //printf("image%d [%d][%d] time : %lf\n", i, j, h, (clock() - start) / (double)CLOCKS_PER_SEC);
+
+                //err = clEnqueueReadBuffer(queue, C[0][0], CL_TRUE, 0, sizeof(float) * CONV_LAYER_SIZES[0], conv, 0, NULL, NULL);
+                //CHECK_ERROR(err);
+
+                // Debug Only
+                //for (int g = 0; g < 10; g++) {
+                //    printf(" %.8f ", conv[g]);
+                //}
+
+                //exit(0);
+            }
+            networkOffset += NETWORK_SIZES[cnt] + NETWORK_SIZES[cnt++]; 
+
+            // Start Pooling Layer
+            // pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
+            // printf("====Excute Pooling Max====\n");
+            //p[j] = alloc_layer_sq((size_t)POOL_LAYER_SIZES[j][0] * POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][2]);
+
+            err = clSetKernelArg(p_layer, 0, sizeof(cl_mem), &C[j][h - 1]);
+            CHECK_ERROR(err);
+            err = clSetKernelArg(p_layer, 1, sizeof(cl_mem), &P[j]);
+            CHECK_ERROR(err);
+            err = clSetKernelArg(p_layer, 2, sizeof(int), &POOL_LAYER_SIZES[j][1]);
+            CHECK_ERROR(err);
+
+            int Nsquare = POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][1];
+            err = clSetKernelArg(p_layer, 3, sizeof(int), &Nsquare);
+            CHECK_ERROR(err);
+
+            global_size3[0] = POOL_LAYER_SIZES[j][0];
+            global_size3[1] = POOL_LAYER_SIZES[j][1];
+            global_size3[2] = POOL_LAYER_SIZES[j][2];
+
+            local_size3[0] = 4;
+            local_size3[1] = 4;
+            local_size3[2] = 4;
+
+            start = clock();
+            clEnqueueNDRangeKernel(queue, p_layer, 3, NULL, global_size3, local_size3, 0, NULL, NULL);
+            CHECK_ERROR(err);
+
+            //err = clEnqueueReadBuffer(queue, P[j], CL_FALSE, 0, sizeof(float) * POOL_LAYER_SIZES[j][0] * POOL_LAYER_SIZES[j][1] * POOL_LAYER_SIZES[j][2],
+            //    p[j], 0, NULL, NULL);
+            //CHECK_ERROR(err);
+
+            err = clFinish(queue);
+            CHECK_ERROR(err);
+            // printf("time : %lf\n", (clock() - start) / (double)CLOCKS_PER_SEC);
+
+        }
+
+        // Start FC Layer 
+        // (__global float* input, __global float* output, __constant float* weights, __constant float* biases, const int inDim, const int outDim)
+        int N = 512;
+
+        for (int k = 0; k < 3; k++) {
+
+            err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), &P[4]);
+            if (k != 0) {
+                err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), &FC[k - 1]);
+                CHECK_ERROR(err);
             }
 
-
-        }
-
-        // Start Pooling Layer
-        // pooling_layer(__global float* input, __global float* output, const int N, const int Nsquare)
-
-        global_size3[0] = POOL_LAYER_SIZES[j][0];
-        global_size3[1] = POOL_LAYER_SIZES[j][1];
-        global_size3[2] = POOL_LAYER_SIZES[j][2];
-
-        local_size3[0] = 4;
-        local_size3[1] = 4;
-        local_size3[2] = 4;
-
-        clEnqueueNDRangeKernel(queue, p_layer, 3, NULL, global_size3, local_size3, 0, NULL, NULL);
-        CHECK_ERROR(err);
-
-        err = clFinish(queue);
-        CHECK_ERROR(err);
-
-    }
-
-    // Start FC Layer
-    // (__global float* input, __global float* output, __local float * l_sum, __global float* weights, biases, inDim, outDim)
-    int N = 512;
-
-    float* w[3] = { network[26], network[28], network[30] };
-    float* b[3] = { network[27], network[29], network[31] };
-
-    for (i = 0; i < 3; i++) {
-
-        err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), P + 5);
-        if (i != 0) {
-            err = clSetKernelArg(f_layer, 0, sizeof(cl_mem), FC + (i - 1));
+            err = clSetKernelArg(f_layer, 1, sizeof(cl_mem), &FC[k]);
             CHECK_ERROR(err);
+            err = clSetKernelArg(f_layer, 2, sizeof(cl_mem), &w[k]);
+            CHECK_ERROR(err);
+            err = clSetKernelArg(f_layer, 3, sizeof(cl_mem), &b[k]);
+            CHECK_ERROR(err);
+            err = clSetKernelArg(f_layer, 4, sizeof(int), &N);
+            CHECK_ERROR(err);
+            err = clSetKernelArg(f_layer, 5, sizeof(int), &FC_LAYER_SIZES[k]); // diff
+            CHECK_ERROR(err);
+
+            global_size2[0] = N;
+            global_size2[1] = FC_LAYER_SIZES[k];
+            local_size2[0] = N;
+            local_size2[1] = 1;
+
+            clEnqueueNDRangeKernel(queue, f_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
+            CHECK_ERROR(err);
+            err = clFinish(queue);
+            CHECK_ERROR(err);
+
         }
 
-        err = clSetKernelArg(f_layer, 1, sizeof(cl_mem), FC + i);
-        CHECK_ERROR(err);
-        err = clSetKernelArg(f_layer, 2, sizeof(cl_float) * N, NULL);
-        CHECK_ERROR(err);
-        err = clSetKernelArg(f_layer, 3, sizeof(cl_float), &w[i]);
-        CHECK_ERROR(err);
-        err = clSetKernelArg(f_layer, 4, sizeof(cl_float), &b[i]);
+        err = clEnqueueReadBuffer(queue, FC[2], CL_TRUE, 0, sizeof(float) * FC_LAYER_SIZES[2], fc3, 0, NULL, NULL);
         CHECK_ERROR(err);
 
-        err = clSetKernelArg(f_layer, 5, sizeof(int), &N);
-        CHECK_ERROR(err);
+        softmax(fc3, 10);
+        labels[i] = find_max(fc3, 10);
+        confidences[i] = fc3[labels[i]];
 
-        err = clSetKernelArg(f_layer, 6, sizeof(int), FC_LAYER_SIZES + i);
-        CHECK_ERROR(err);
-
-        global_size2[0] = N;
-        global_size2[1] = FC_LAYER_SIZES[i];
-        local_size2[0] = 64;
-        local_size2[1] = 1;
-
-        clEnqueueNDRangeKernel(queue, f_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
-        CHECK_ERROR(err);
-        err = clFinish(queue);
-        CHECK_ERROR(err);
-
+        // Test Print
+        printf("labels[%d] : %d | confidences[%d] = %f\n", i, labels[i], i, confidences[i]);
     }
 
-    err = clEnqueueReadBuffer(queue, FC[3], CL_TRUE, 0, sizeof(float) * FC_LAYER_SIZES[3], fc3, 0, NULL, NULL);
-    CHECK_ERROR(err);
-
-    softmax(fc3, 10);
-    labels[i] = find_max(fc3, 10);
-    confidences[i] = fc3[labels[i]];
 
     for (i = 0; i < 5; i++) {
 
@@ -642,6 +559,4 @@ void cnn(float* images, float** network, int* labels, float* confidences, int nu
 
     free(device);
     free(platform);
-
 }
-*/

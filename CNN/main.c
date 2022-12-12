@@ -80,6 +80,7 @@ float* read_network() {
     return (float*)read_bytes("network.bin", 60980520);
 }
 
+/*
 float** slice_network(float* p) {
     float** r = (float**)malloc(sizeof(float*) * 32);
     for (int i = 0; i < 32; ++i) {
@@ -88,6 +89,7 @@ float** slice_network(float* p) {
     }
     return r;
 }
+*/
 
 int main(int argc, char** argv) {
 	if (argc != 3) {
@@ -105,7 +107,7 @@ int main(int argc, char** argv) {
 	}
 	float* images = (float*)readfile("images.bin", sizeof(float) * 32 * 32 * 3 * num_of_image);
     float* network = read_network();
-    float** network_sliced = slice_network(network);
+    //float** network_sliced = slice_network(network);
 	int* labels = (int*)malloc(sizeof(int) * num_of_image);
 	float* confidences = (float*)malloc(sizeof(float) * num_of_image);
 	
@@ -113,7 +115,7 @@ int main(int argc, char** argv) {
 	time_t start, end;
 	start = clock();
 	//cnn_seq(images, network, labels, confidences, num_of_image);
-	cnn(images, network_sliced, labels, confidences, num_of_image);
+	cnn(images, network, labels, confidences, num_of_image);
 	end = clock();
 	printf("Elapsed time: %.2f sec\n", (double)(end - start) / CLK_TCK);
 
