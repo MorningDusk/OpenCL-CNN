@@ -1,92 +1,135 @@
 #define ReLU(x) (((x)>0)?(x):0)
-__kernel void convolution_layer (__global float* inputs, __global float* outputs, __global float* filters, __global float* biases, int D2, int D1, int N) {
-
-	int i, j, k, l;
-
-	for (j = 0; j < D2; j++) {
-		for (i = 0; i < D1; i++) {
-			__global float* input = inputs + N * N * i;
-			__global float* output = outputs + N * N * j;
-			__global float* filter = filters + 3 * 3 * (j * D1 + i);
-
-			for (i = 0; i < N; i++) {
-				for (j = 0; j < N; j++) {
-					float sum = 0;
-					for (k = 0; k < 3; k++) {
-						for (l = 0; l < 3; l++) {
-							int x = i + k - 1;
-							int y = j + l - 1;
-							if (x >= 0 && x < N && y >= 0 && y < N)
-								sum += input[x * N + y] * filter[k * 3 + l];
-						}
-					}
-					output[i * N + j] += sum;
-				}
-			}
-		}
-	}
-
-	for (i = 0; i < D2; i++) {
-
-		__global float* output = outputs + N * N * i;
+__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, const  int outDim, const int N){
 	
-		for (j = 0; j < N * N; j++) {
-			output[j] = ReLU(output[j] + biases[i]);
-		}
+    __global float* input = inputs + imageOffset;
+    __global float* output = outputs;
 
-	}
+    int i, j, x, y;
+    int g_j = get_global_id(0);
 
-}
+    int rows = g_j / N; 
+    int col = g_j % N; 
+    int dim = rows / N; 
+    int row = rows - dim * N; 
 
-__kernel void fc_layer (__global float* input, __global float* output, __global float* weights, __local float * l_sum, __global float* biases, const int inDim, const int outDim) {
-   
-    int i = get_global_id(0);
-	int l_id = get_local_id(1);
-
-	int offset = (inDim * i);
-
-    l_sum[l_id] = input[offset + l_id];
-	barrier(CLK_LOCAL_MEM_FENCE);
-
-    if(l_id == 0) {
-        
-		for	(int size = 0 ; size < get_local_size(0) ; size++) {
-
-		if(l_id < size) {
-			l_sum[l_id] += l_sum[l_id + size] * weights[offset + size];
-		}
-
-		barrier(CLK_LOCAL_MEM_FENCE);
-
-		}
-
-		l_sum[l_id] += biases[i];
-        output[i] = (l_sum[l_id] > 0) ? l_sum[l_id] : 0;
-    }
-  
-}
-
-__kernel void pooling_layer (__global float* input, __global float* output, const int N, const int Nsquare)
-{
-    int pos_z = get_global_id(0);
-    int pos_y = get_global_id(1);
-    int pos_x = get_global_id(2);
-
-    float temp;
-    float max = .0f;
-
-    __global float* inpt = input + pos_z * Nsquare * 4;
-    __global float* oupt = output + pos_z * Nsquare;
-
-    for (int y = 0; y < 2; y++)
-    {
-        for (int x = 0; x < 2; x++)
-        {
-            temp = inpt[(pos_y * 2 + y) * 2 * N + pos_x * 2 + x];
-            if (max < temp) max = temp;
+    #pragma unroll
+    for (i = 0; i < 3; i++) {
+        #pragma unroll
+        for (j = 0; j < 3; j++) {
+            x = col + j - 1;
+            y = row + i - 1;
+            if (x >= 0 && x < N && y >= 0 && y < N)
+                output[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = input[((dim * N) + y) * N + x];
+            else
+                output[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = 0.0f;
         }
     }
+}
 
-    oupt[pos_y * N + pos_x] = max;
+__kernel void convolution_2 (__global float *inputs, __global float *outputs, __global float *networks, const int networkOffset, const int inDim, const int outDim, const int N) {
+    
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int g_row = get_group_id(0) * 16 + row;
+    const int g_col = get_group_id(1) * 16 + col;
 
-} 
+    __global float* input = inputs;
+    __global float* output = outputs;
+    __global float * filter = networks + networkOffset;
+    __global float * biases = networks + networkOffset + (inDim * outDim * 9);
+    __local float filterSub[16][16];
+    __local float inputSub[16][16];
+
+    int i, j;
+    int ROW_A = outDim; 
+    int ROW_B = inDim * 3 * 3;
+    int COL_A = inDim * 3 * 3;
+    int COL_B = N * N;
+
+    float sum = 0.0f;
+
+    #pragma unroll
+    for (i = 0; i < COL_A; i += 16) {
+        const int temp_col = i + col;
+        const int temp_row = i + row;
+
+        if (g_col < outDim && temp_row < COL_A)
+            filterSub[col][row] = filter[g_col * COL_A + temp_row];
+        else
+            filterSub[col][row] = 0;
+        
+        if (temp_col < ROW_B&& g_row < COL_B)
+            inputSub[col][row] = input[temp_col * COL_B + g_row];
+        else
+            inputSub[col][row] = 0;
+
+        barrier(CLK_LOCAL_MEM_FENCE);   
+
+        #pragma unroll
+        for (j = 0; j < 16; j++) {
+            sum += filterSub[col][j] * inputSub[j][row];
+        }
+        barrier(CLK_LOCAL_MEM_FENCE);
+    }
+
+    if (g_col < ROW_A && g_row < COL_B) {
+        sum += biases[g_col];
+        output[g_col * COL_B + g_row] = ReLU(sum);
+    }
+}
+
+
+__kernel void pooling_max (__global float *inputs, __global float *outputs, const int inDim, const int N) {
+    
+    const int g_i=get_global_id(0);
+	const int g_j=get_global_id(1);
+
+    __global float *input, * output;
+    
+    int i, j;
+    int group_num=(g_i/N);
+	int frow=g_j%N;
+	int fcol=g_i%N;
+	float max=0.0f;
+
+    input=inputs+(N*N)*4*group_num;
+	output=outputs+(N * N)*group_num;
+
+
+	#pragma unroll
+	for(int i=0; i<2;i++){
+		#pragma unroll
+		for(int j=0;j<2;j++){
+			float temp=input[(N * 2)*(2*frow+i)+(2*fcol+j)];
+            if (max < temp)
+                max = temp;
+		}
+	}
+
+	output[N*frow+fcol]=max;
+
+}
+
+
+__kernel void fc_layer (__global float *inputs, __global float *outputs, __global float *networks, const int networkOffset, const int inDim, const int outDim) {
+    
+    __global float *weights = networks + networkOffset;
+	__global float *biases = networks + networkOffset;
+
+    int TS=(outDim!=10?16:2);
+    int l_i=get_local_id(0);
+    int output_group=get_group_id(0)*TS+l_i;
+    
+    float sum=0.0f;
+    weights += inDim * output_group;
+    biases += (inDim * outDim) + output_group;
+
+	if(output_group>=outDim) return;
+	
+	#pragma unroll
+	for(int i=0;i<inDim;i++) {
+		sum += inputs[i] * weights[i];
+	}
+	sum += biases[0];
+	outputs[output_group] = ReLU(sum);
+}
