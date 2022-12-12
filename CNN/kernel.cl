@@ -150,7 +150,7 @@ __kernel void fc_layer
 	int j = get_global_id(1);
 
 	output[i] = input[i];
-	/*
+	
 	int delta = (inDim * i);
 	float sum = 0.0f;
 
@@ -165,7 +165,7 @@ __kernel void fc_layer
     }
 
 	sum += biases[i];
-	// output[i] = sum; 
-    //output[i] = ReLU(sum);
-	*/
+	output[i] = sum; 
+    output[i] = ReLU(sum);
+	
 }
