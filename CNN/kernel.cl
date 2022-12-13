@@ -69,8 +69,8 @@ __kernel void convolution_2
             const int TEMP_ROW = i + ROW;
             const int TEMP_COL = i + COL;
 
-            filter[COL][ROW] = (GROUP_COL < outDim && TEMP_ROW < colA ? filters[TEMP_ROW + GROUP_COL * colA] : 0);
-            inputSub[COL][ROW] = (TEMP_COL < rowB && GROUP_ROW < colB ? input[GROUP_ROW + TEMP_COL * colB] : 0);
+            filter[ROW][COL] = (GROUP_COL < outDim && TEMP_ROW < colA ? filters[GROUP_ROW * colA + TEMP_COL] : 0);
+            inputSub[ROW][COL] = (TEMP_COL < rowB && GROUP_ROW < colB ? input[TEMP_ROW * colB + GROUP_COL] : 0);
         
         } barrier(CLK_LOCAL_MEM_FENCE);   
 
@@ -78,7 +78,7 @@ __kernel void convolution_2
         for (j = 0; j < 16; j++) {
 
             for(w = 0; w < WPT; W++) {
-                sum[w] += inputSub[j][ROW] * filter[COL][j];
+                sum[w] += inputSub[ROW][j] * filter[j][COL];
             }
       
         } barrier(CLK_LOCAL_MEM_FENCE);
@@ -88,8 +88,8 @@ __kernel void convolution_2
     if (GROUP_COL < rowA && GROUP_ROW < colB) {
         
         for(w = 0; w < WPT; W++) {
-            sum[w] += biases[GROUP_COL];
-            output[GROUP_ROW + GROUP_ROWL * colB] = ReLU(sum[w]);
+            sum[w] += biases[GROUP_ROW];
+            output[GROUP_ROW * colB + GROUP_COL] = ReLU(sum[w]);
         }
     }
 
