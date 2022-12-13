@@ -1,4 +1,5 @@
 #define ReLU(x) (((x)>0)?(x):0)
+#define WPT 4
 
 __kernel void convolution_1 
 (__global float *inputs, const int imageOffset, __global float *outputs, const int outDim, const int N){
@@ -47,7 +48,7 @@ __kernel void convolution_2
     __local float filter[16][16];
     __local float inputSub[16][16];
 
-    int i, j;
+    int i, j, w;
 
     int rowA = outDim; 
     int colA = inDim * 3 * 3;
@@ -55,31 +56,41 @@ __kernel void convolution_2
     int rowB = inDim * 3 * 3;
     int colB = N * N;
 
-    float sum = 0.0f;
+    float sum[WPT];
+    for(w = 0; w < WPT; w++) {
+        sum[w] = 0.0f;
+    }
 
     #pragma unroll
     for (i = 0; i < colA; i += 16) {
+        
+        for(w = 0; w < WPT; W++) {
+            
+            const int TEMP_ROW = i + ROW;
+            const int TEMP_COL = i + COL;
 
-        const int TEMP_COL = i + COL;
-        const int TEMP_ROW = i + ROW;
-
-        filter[COL][ROW] = (GROUP_COL < outDim && TEMP_ROW < colA ? filters[GROUP_COL * colA + TEMP_ROW] : 0);
-        inputSub[COL][ROW] = (TEMP_COL < rowB && GROUP_ROW < colB ? input[TEMP_COL * colB + GROUP_ROW] : 0);
-      
-        barrier(CLK_LOCAL_MEM_FENCE);   
+            filter[COL][ROW] = (GROUP_COL < outDim && TEMP_ROW < colA ? filters[TEMP_ROW + GROUP_COL * colA] : 0);
+            inputSub[COL][ROW] = (TEMP_COL < rowB && GROUP_ROW < colB ? input[GROUP_ROW + TEMP_COL * colB] : 0);
+        
+        } barrier(CLK_LOCAL_MEM_FENCE);   
 
         #pragma unroll
         for (j = 0; j < 16; j++) {
-            sum += inputSub[j][ROW] * filter[COL][j];
-        }
 
-        barrier(CLK_LOCAL_MEM_FENCE);
+            for(w = 0; w < WPT; W++) {
+                sum[w] += inputSub[j][ROW] * filter[COL][j];
+            }
+      
+        } barrier(CLK_LOCAL_MEM_FENCE);
     
     }
 
     if (GROUP_COL < rowA && GROUP_ROW < colB) {
-        sum += biases[GROUP_COL];
-        output[GROUP_COL * colB + GROUP_ROW] = ReLU(sum);
+        
+        for(w = 0; w < WPT; W++) {
+            sum[w] += biases[GROUP_COL];
+            output[GROUP_ROW + GROUP_ROWL * colB] = ReLU(sum[w]);
+        }
     }
 
 }
