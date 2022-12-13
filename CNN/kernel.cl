@@ -67,7 +67,7 @@ __kernel void convolution_2 (__global float *inputs, __global float *outputs, __
 
         #pragma unroll
         for (j = 0; j < 16; j++) {
-            sum += input[j][ROW] * filter[COL][j];
+            sum += inputSub[j][ROW] * filter[COL][j];
         }
 
         barrier(CLK_LOCAL_MEM_FENCE);
