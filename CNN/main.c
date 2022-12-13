@@ -43,54 +43,6 @@ void* readfile(const char* filename, int nbytes) {
 	return buf;
 }
 
-void* read_bytes(const char* fn, size_t n) {
-    FILE* f = fopen(fn, "rb");
-    void* bytes = malloc(n);
-    size_t r = fread(bytes, 1, n, f);
-    fclose(f);
-    if (r != n) {
-        fprintf(stderr,
-            "%s: %zd bytes are expected, but %zd bytes are read.\n",
-            fn, n, r);
-        exit(EXIT_FAILURE);
-    }
-    return bytes;
-}
-
-const int NETWORK_SIZES[] = {
-    64 * 3 * 3 * 3, 64,
-    64 * 64 * 3 * 3, 64,
-    128 * 64 * 3 * 3, 128,
-    128 * 128 * 3 * 3, 128,
-    256 * 128 * 3 * 3, 256,
-    256 * 256 * 3 * 3, 256,
-    256 * 256 * 3 * 3, 256,
-    512 * 256 * 3 * 3, 512,
-    512 * 512 * 3 * 3, 512,
-    512 * 512 * 3 * 3, 512,
-    512 * 512 * 3 * 3, 512,
-    512 * 512 * 3 * 3, 512,
-    512 * 512 * 3 * 3, 512,
-    512 * 512, 512,
-    512 * 512, 512,
-    10 * 512, 10
-};
-
-float* read_network() {
-    return (float*)read_bytes("network.bin", 60980520);
-}
-
-/*
-float** slice_network(float* p) {
-    float** r = (float**)malloc(sizeof(float*) * 32);
-    for (int i = 0; i < 32; ++i) {
-        r[i] = p;
-        p += NETWORK_SIZES[i];
-    }
-    return r;
-}
-*/
-
 int main(int argc, char** argv) {
 	if (argc != 3) {
 		perror("error while get argument");
@@ -106,15 +58,13 @@ int main(int argc, char** argv) {
 		exit(1);
 	}
 	float* images = (float*)readfile("images.bin", sizeof(float) * 32 * 32 * 3 * num_of_image);
-    float* network = read_network();
-    //float** network_sliced = slice_network(network);
+	float* network = (float*)readfile("network.bin", 60980520);
 	int* labels = (int*)malloc(sizeof(int) * num_of_image);
 	float* confidences = (float*)malloc(sizeof(float) * num_of_image);
 	
 	cnn_init();
 	time_t start, end;
 	start = clock();
-	//cnn_seq(images, network, labels, confidences, num_of_image);
 	cnn(images, network, labels, confidences, num_of_image);
 	end = clock();
 	printf("Elapsed time: %.2f sec\n", (double)(end - start) / CLK_TCK);
@@ -130,7 +80,6 @@ int main(int argc, char** argv) {
 	fprintf(fp, "Accuracy: %f\n", acc / num_of_image);
 	fclose(fp);
 	compare(argv[2], num_of_image);
-
 
 	free(images);
 	free(network);

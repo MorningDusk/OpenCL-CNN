@@ -1,171 +1,136 @@
 #define ReLU(x) (((x)>0)?(x):0)
-__kernel void convolution_layer (__global float* inputs, __global float* outputs, __constant float* networks,
-								 int offset, int D2, int D1, int N, int Nsquare) {
+__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, const int outDim, const int N){
+	
+    const int GROUP_J = get_global_id(0);
+
+    __global float* input = inputs + imageOffset;
+    __global float* output = outputs;
+
+    int i, j, x, y;
     
-    __global float *input, *output;
-    __constant float* filters = networks + offset;
-	__constant float* biases = filters + D2;
+    int rows = GROUP_J / N; 
+    int col = GROUP_J % N; 
+    int dim = rows / N; 
+    int row = rows - dim * N; 
 
-    __local float element[4608]; // 9 * 512
-    __local float local_sum;
-
-    // for parallel index
-    int x, y;
-
-    int channel = get_local_id(0);      // 채널 index
-    int pixel = get_group_id(0);        // 픽셀 index
-
-    // for variable devide input by matrix(3by3)
-    const int matrixSize = 9;
-
-    // insert element
-	int row = pixel / N, col = pixel % N;
-    input = inputs + (pixel + channel * N * N - N - 1);
-	
-    // (0, 0) ~ (0, 2)
-	x = row - 1; y = col - 1;
-	element[9 * channel] = (0 <= x && x < N && 0 <= y && y < N ? input[0] : 0);
-	x = row - 1; y = col;
-	element[9 * channel + 1] = (0 <= x && x < N && 0 <= y && y < N ? input[1] : 0);
-	x = row - 1; y = col + 1;
-	element[9 * channel + 2] = (0 <= x && x < N && 0 <= y && y < N ? input[2] : 0);
-	
-	x = row; y = col - 1;
-	element[9 * channel + 3] = (0 <= x && x < N && 0 <= y && y < N ? input[N] : 0);
-	x = row; y = col;
-	element[9 * channel + 4] = (0 <= x && x < N && 0 <= y && y < N ? input[N + 1] : 0);
-	x = row; y = col + 1;
-	element[9 * channel + 5] = (0 <= x && x < N && 0 <= y && y < N ? input[N + 2] : 0);
-
-	x = row + 1; y = col - 1;
-	element[9 * channel + 6] = (0 <= x && x < N && 0 <= y && y < N ? input[2 * N] : 0);
-	x = row + 1; y = col;
-	element[9 * channel + 7] = (0 <= x && x < N && 0 <= y && y < N ? input[2 * N + 1] : 0);	
-	x = row + 1; y = col + 1;
-	element[9 * channel + 8] = (0 <= x && x < N && 0 <= y && y < N ? input[2 * N + 2] : 0);
-	
-	 
-    if (256 < D1) {
-        input = inputs + (pixel + (channel + 256) * N * N - N - 1);
-        
-        x = row - 1; y = col - 1;
-		element[9 * (channel + 256)] = (0 <= x && x < N && 0 <= y && y < N ? input[0] : 0);
-		
-		x = row - 1; y = col;
-		element[9 * (channel + 256) + 1] = (0 <= x && x < N && 0 <= y && y < N ? input[1] : 0);
-		
-		x = row - 1; y = col + 1;
-		element[9 * (channel + 256) + 2] = (0 <= x && x < N && 0 <= y && y < N ? input[2] : 0);
-		
-		x = row; y = col - 1;
-		element[9 * (channel + 256) + 3] = (0 <= x && x < N && 0 <= y && y < N ? input[N] : 0);
-		
-		x = row; y = col;
-		element[9 * (channel + 256) + 4] = (0 <= x && x < N && 0 <= y && y < N ? input[N + 1] : 0);
-
-		x = row; y = col + 1;
-		element[9 * (channel + 256) + 5] = (0 <= x && x < N && 0 <= y && y < N ? input[N + 2] : 0);
-		
-		x = row + 1; y = col - 1;
-		element[9 * (channel + 256) + 6] = (0 <= x && x < N && 0 <= y && y < N ? input[2 * N] : 0);
-		
-		x = row + 1; y = col;
-		element[9 * (channel + 256) + 7] = (0 <= x && x < N && 0 <= y && y < N ? input[2 * N + 1] : 0);
-		
-		x = row + 1; y = col + 1;
-		element[9 * (channel + 256) + 8] = (0 <= x && x < N && 0 <= y && y < N ? input[2 * N + 2] : 0);
-    }   
-
-    float sum, result;
-	__constant float * filter;
-
-    for (int k = 0; k < D2; k++) {
-        
-        local_sum = sum = 0; 
-        
-        filter = filters + (9 * (k * D1 + channel));
-
-        sum += (element[9 * channel] == 0 ? 0 : element[9 * channel] * filter[0]);
-		sum += (element[9 * channel + 1] == 0 ? 0 : element[9 * channel + 1] * filter[1]);
-		sum += (element[9 * channel + 2] == 0 ? 0 : element[9 * channel + 2] * filter[2]);
-		sum += (element[9 * channel + 3] == 0 ? 0 : element[9 * channel + 3] * filter[3]);
-		sum += (element[9 * channel + 4] == 0 ? 0 : element[9 * channel + 4] * filter[4]);
-		sum += (element[9 * channel + 5] == 0 ? 0 : element[9 * channel + 5] * filter[5]);
-		sum += (element[9 * channel + 6] == 0 ? 0 : element[9 * channel + 6] * filter[6]);
-		sum += (element[9 * channel + 7] == 0 ? 0 : element[9 * channel + 7] * filter[7]);
-		sum += (element[9 * channel + 8] == 0 ? 0 : element[9 * channel + 8] * filter[8]);
-
-        if (256 < D1) {
-            filter = filters + (9 * (k * D1 + channel + 256));
-
-            sum += (element[9 * (channel + 256)] == 0 ? 0 : element[9 * (channel + 256)] * filter[0]);
-			sum += (element[9 * (channel + 256) + 1] == 0 ? 0 : element[9 * (channel + 256) + 1] * filter[1]);
-			sum += (element[9 * (channel + 256) + 2] == 0 ? 0 : element[9 * (channel + 256) + 2] * filter[2]);
-			sum += (element[9 * (channel + 256) + 3] == 0 ? 0 : element[9 * (channel + 256) + 3] * filter[3]);
-			sum += (element[9 * (channel + 256) + 4] == 0 ? 0 : element[9 * (channel + 256) + 4] * filter[4]);
-			sum += (element[9 * (channel + 256) + 5] == 0 ? 0 : element[9 * (channel + 256) + 5] * filter[5]);
-			sum += (element[9 * (channel + 256) + 6] == 0 ? 0 : element[9 * (channel + 256) + 6] * filter[6]);
-			sum += (element[9 * (channel + 256) + 7] == 0 ? 0 : element[9 * (channel + 256) + 7] * filter[7]);
-			sum += (element[9 * (channel + 256) + 8] == 0 ? 0 : element[9 * (channel + 256) + 8] * filter[8]);
+    #pragma unroll
+    for (i = 0; i < 3; i++) {
+        #pragma unroll
+        for (j = 0; j < 3; j++) {
+            x = col + j - 1;
+            y = row + i - 1;
+            if ((0 <= x && x < N) && (0 <= y && y < N))
+                output[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = input[((dim * N) + y) * N + x];
+            else
+                output[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = 0.0f;
         }
-
-        local_sum += sum;
-        result = local_sum + biases[k];
-
-        output = outputs + (Nsquare * k);
-        output[pixel] = ReLU(result);  
     }
-	
 }
 
-__kernel void pooling_layer (__global float* input, __global float* output, const int N, const int Nsquare)
-{
-    int pos_z = get_global_id(0);
-    int pos_y = get_global_id(1);
-    int pos_x = get_global_id(2);
+__kernel void convolution_2 (__global float *inputs, __global float *outputs, __global float *networks, const int networkOffset, const int inDim, const int outDim, const int N) {
+    
+    const int row = get_local_id(0);
+    const int col = get_local_id(1);
+    const int g_row = get_group_id(0) * 16 + row;
+    const int g_col = get_group_id(1) * 16 + col;
 
-    float temp;
-    float max = .0f;
+    __global float* input = inputs;
+    __global float* output = outputs;
+    __global float * filter = networks + networkOffset;
+    __global float * biases = networks + networkOffset + (inDim * outDim * 9);
+    __local float filterSub[16][16];
+    __local float inputSub[16][16];
 
-    __global float* inpt = input + pos_z * Nsquare * 4;
-    __global float* oupt = output + pos_z * Nsquare;
+    int i, j;
+    int ROW_A = outDim; 
+    int ROW_B = inDim * 3 * 3;
+    int COL_A = inDim * 3 * 3;
+    int COL_B = N * N;
 
-    for (int y = 0; y < 2; y++) {
-        for (int x = 0; x < 2; x++) {
-            temp = inpt[(pos_y * 2 + y) * 2 * N + pos_x * 2 + x];
-            if (max < temp) max = temp;
+    float sum = 0.0f;
+
+    #pragma unroll
+    for (i = 0; i < COL_A; i += 16) {
+        const int temp_col = i + col;
+        const int temp_row = i + row;
+
+        if (g_col < outDim && temp_row < COL_A)
+            filterSub[col][row] = filter[g_col * COL_A + temp_row];
+        else
+            filterSub[col][row] = 0;
+        
+        if (temp_col < ROW_B&& g_row < COL_B)
+            inputSub[col][row] = input[temp_col * COL_B + g_row];
+        else
+            inputSub[col][row] = 0;
+
+        barrier(CLK_LOCAL_MEM_FENCE);   
+
+        #pragma unroll
+        for (j = 0; j < 16; j++) {
+            sum += filterSub[col][j] * inputSub[j][row];
         }
+        barrier(CLK_LOCAL_MEM_FENCE);
     }
 
-    oupt[pos_y * N + pos_x] = max;
-} 
+    if (g_col < ROW_A && g_row < COL_B) {
+        sum += biases[g_col];
+        output[g_col * COL_B + g_row] = ReLU(sum);
+    }
+}
 
-__kernel void fc_layer 
-	(__global float* input, __global float* output, __constant float* networks, const int offset, const int inDim, const int outDim) {
-	
-	__constant float* weights = networks + offset;
-	__constant float* biases = weights + outDim;
 
-    int i = get_global_id(0);
-	int j = get_global_id(1);
+__kernel void pooling_max (__global float *inputs, __global float *outputs, const int inDim, const int N) {
+    
+    const int g_i=get_global_id(0);
+	const int GROUP_J=get_global_id(1);
 
-	output[i] = input[i];
-	/*
-	int delta = (inDim * i);
-	float sum = 0.0f;
+    __global float *input, * output;
+    
+    int i, j;
+    int group_num=(g_i/N);
+	int frow=GROUP_J%N;
+	int fcol=g_i%N;
+	float max=0.0f;
 
-	if(i >= outDim) return;
+    input=inputs+(N*N)*4*group_num;
+	output=outputs+(N * N)*group_num;
 
-	__global float* inpt = input + delta;
-	__constant float * weight = weights + delta;
 
 	#pragma unroll
-	for	(int size = 0 ; size < inDim; size++) {
-		sum += inpt[size] * weight[size];
-    }
+	for(int i=0; i<2;i++){
+		#pragma unroll
+		for(int j=0;j<2;j++){
+			float temp=input[(N * 2)*(2*frow+i)+(2*fcol+j)];
+            if (max < temp)
+                max = temp;
+		}
+	}
 
-	sum += biases[i];
-	// output[i] = sum; 
-    //output[i] = ReLU(sum);
-	*/
+	output[N*frow+fcol]=max;
+
+}
+
+
+__kernel void fc_layer (__global float *inputs, __global float *outputs, __global float *networks, const int networkOffset, const int inDim, const int outDim) {
+    
+    __global float *weights = networks + networkOffset;
+	__global float *biases = networks + networkOffset;
+
+    int TS=(outDim!=10?16:2);
+    int l_i=get_local_id(0);
+    int output_group=get_group_id(0)*TS+l_i;
+    
+    float sum=0.0f;
+    weights += inDim * output_group;
+    biases += (inDim * outDim) + output_group;
+
+	if(output_group>=outDim) return;
+	
+	#pragma unroll
+	for(int i=0;i<inDim;i++) {
+		sum += inputs[i] * weights[i];
+	}
+	sum += biases[0];
+	outputs[output_group] = ReLU(sum);
 }
