@@ -1,14 +1,15 @@
 #define ReLU(x) (((x)>0)?(x):0)
-__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, const  int outDim, const int N){
+__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, const int outDim, const int N){
 	
+    const int GROUP_J = get_global_id(0);
+
     __global float* input = inputs + imageOffset;
     __global float* output = outputs;
 
     int i, j, x, y;
-    int g_j = get_global_id(0);
-
-    int rows = g_j / N; 
-    int col = g_j % N; 
+    
+    int rows = GROUP_J / N; 
+    int col = GROUP_J % N; 
     int dim = rows / N; 
     int row = rows - dim * N; 
 
@@ -18,7 +19,7 @@ __kernel void convolution_1 (__global float *inputs, const int imageOffset, __gl
         for (j = 0; j < 3; j++) {
             x = col + j - 1;
             y = row + i - 1;
-            if (x >= 0 && x < N && y >= 0 && y < N)
+            if ((0 <= x && x < N) && (0 <= y && y < N))
                 output[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = input[((dim * N) + y) * N + x];
             else
                 output[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = 0.0f;
@@ -82,13 +83,13 @@ __kernel void convolution_2 (__global float *inputs, __global float *outputs, __
 __kernel void pooling_max (__global float *inputs, __global float *outputs, const int inDim, const int N) {
     
     const int g_i=get_global_id(0);
-	const int g_j=get_global_id(1);
+	const int GROUP_J=get_global_id(1);
 
     __global float *input, * output;
     
     int i, j;
     int group_num=(g_i/N);
-	int frow=g_j%N;
+	int frow=GROUP_J%N;
 	int fcol=g_i%N;
 	float max=0.0f;
 

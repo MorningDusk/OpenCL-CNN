@@ -87,11 +87,13 @@ const int FC_LAYER_SIZES[3] = {
 	10 };
 
 const int TS = 16;
-const int IMAGE_BUFFER_SIZE = 32 * 32 * 3;
-const int BUFFER_SIZE = 64 * 32 * 32;
-const int CONV_TEMP_BUFFER_SIZE = 64 * 32 * 32 * 3 * 3;
-const int LAYER_BUFFER_SIZE = 512;
+const int IMAGE_SIZE = 3072;
 const int NETWORK_BUFFER_SIZE = 60980520;
+const int BUFFER_SIZE = 65536;
+const int CONV_TEMP_BUFFER_SIZE = 589824;
+const int LAYER_BUFFER_SIZE = 512;
+const int OUT_NEURON_SIZE = 10;
+
 
 cl_int err;
 cl_platform_id platform;
@@ -116,8 +118,7 @@ size_t local_size;
 size_t global_size2[2];
 size_t local_size2[2];
 
-void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int inDim, int outDim, int N)
-{
+void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int inDim, int outDim, int N) {
 
 	// (inputs, imageOffset, outputs, outDim, N)
 	err = clSetKernelArg(conv1_layer, 0, sizeof(cl_mem), inputs);
@@ -139,15 +140,6 @@ void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int in
 	err = clEnqueueNDRangeKernel(queue, conv1_layer, 1, NULL, global_size2, local_size2, 0, NULL, NULL);
 	CHECK_ERROR(err);
 
-	global_size2[0] = N * N;
-	global_size2[1] = outDim;
-	local_size2[0] = TS;
-	local_size2[1] = TS;
-
-	if (global_size2[0] < TS) {
-		global_size2[0] = TS;
-	}
-
 	// (inputs, outputs, networks, networkOffset, inDim, outDim, N)
 	err = clSetKernelArg(conv2_layer, 0, sizeof(cl_mem), &convTempBuffer);
 	CHECK_ERROR(err);
@@ -163,6 +155,15 @@ void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int in
 	CHECK_ERROR(err);
 	err = clSetKernelArg(conv2_layer, 6, sizeof(int), &N);
 	CHECK_ERROR(err);
+
+	global_size2[0] = N * N;
+	global_size2[1] = outDim;
+	local_size2[0] = TS;
+	local_size2[1] = TS;
+
+	if (global_size2[0] < TS) {
+		global_size2[0] = TS;
+	}
 
 	err = clEnqueueNDRangeKernel(queue, conv2_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
 	CHECK_ERROR(err);
@@ -294,9 +295,9 @@ void cnn(float* images, float* network, int* labels, float* confidences, int num
 	int i;
 
 	// Create Buffer
-	imageBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(float) * num_images * IMAGE_BUFFER_SIZE, NULL, &err);
+	imageBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY, sizeof(float) * num_images * IMAGE_SIZE, NULL, &err);
 	CHECK_ERROR(err);
-	err = clEnqueueWriteBuffer(queue, imageBuffer, CL_FALSE, 0, sizeof(float) * num_images * IMAGE_BUFFER_SIZE, images, 0, NULL, NULL);
+	err = clEnqueueWriteBuffer(queue, imageBuffer, CL_FALSE, 0, sizeof(float) * num_images * IMAGE_SIZE, images, 0, NULL, NULL);
 	CHECK_ERROR(err);
 
 	networkBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NETWORK_BUFFER_SIZE, network, &err);
@@ -323,13 +324,13 @@ void cnn(float* images, float* network, int* labels, float* confidences, int num
 	float* fc = alloc_layer(10);
 
 	for (i = 0; i < num_images; i++) {
-		int cnt = 0;
-		imageOffset = i * 3 * 32 * 32;
+
+		imageOffset = i * IMAGE_SIZE;
 		networkOffset = 0;
 
 		convolution_layer(&imageBuffer, &convOutputBuffer, &networkBuffer, CONV_LAYERS_ARGS[0][0], CONV_LAYERS_ARGS[0][1], CONV_LAYERS_ARGS[0][2]);
-		imageOffset = 0;
 		networkOffset += NETWORK_SIZES[0] + NETWORK_SIZES[1];
+		imageOffset = 0;
 		convolution_layer(&convOutputBuffer, &convInputBuffer, &networkBuffer, CONV_LAYERS_ARGS[0][1], CONV_LAYERS_ARGS[0][1], CONV_LAYERS_ARGS[0][2]);
 		networkOffset += NETWORK_SIZES[2] + NETWORK_SIZES[3];
 
@@ -374,12 +375,12 @@ void cnn(float* images, float* network, int* labels, float* confidences, int num
 		networkOffset += NETWORK_SIZES[28] + NETWORK_SIZES[29];
 		fc_layer(&fcInputBuffer, &fcOutputBuffer, &networkBuffer, FC_LAYER_SIZES[1], FC_LAYER_SIZES[2]);
 
-		err = clEnqueueReadBuffer(queue, fcOutputBuffer, CL_TRUE, 0, sizeof(float) * 10, fc, 0, NULL, NULL);
+		err = clEnqueueReadBuffer(queue, fcOutputBuffer, CL_TRUE, 0, sizeof(float) * OUT_NEURON_SIZE, fc, 0, NULL, NULL);
 		CHECK_ERROR(err);
 
-		softmax(fc, 10);
+		softmax(fc, OUT_NEURON_SIZE);
 
-		labels[i] = find_max(fc, 10);
+		labels[i] = find_max(fc, OUT_NEURON_SIZE);
 		confidences[i] = fc[labels[i]];
 	}
 
