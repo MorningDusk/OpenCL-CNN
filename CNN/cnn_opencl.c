@@ -121,7 +121,6 @@ size_t local_size;
 size_t global_size2[2];
 size_t local_size2[2];
 
-
 void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int inDim, int outDim, int N) {
 
 	// (inputs, imageOffset, outputs, outDim, N)
@@ -275,11 +274,10 @@ void cnn_init()
 	CHECK_ERROR(err);
 
 	/* CREATE PROGRAM */
-<<<<<<< HEAD
+
 	char* kernel_source;
 	size_t kernel_source_size;
-=======
->>>>>>> 362a559d54bc7db66657f7fd07bfb28d9342d74a
+
 	kernel_source = get_source_code("kernel.cl", &kernel_source_size);
 	program = clCreateProgramWithSource(context, 1, (const char**)&kernel_source, &kernel_source_size, &err);
 	CHECK_ERROR(err);
