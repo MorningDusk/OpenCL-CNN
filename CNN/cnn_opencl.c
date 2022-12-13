@@ -108,14 +108,12 @@ cl_mem convInputBuffer, convTempBuffer, convOutputBuffer;
 cl_mem poolInputBuffer, poolOutputBuffer;
 cl_mem fcInputBuffer, fcOutputBuffer;
 
-int imageOffset, networkOffset;
-char* kernel_source;
-
-size_t kernel_source_size;
 size_t global_size;
 size_t local_size;
 size_t global_size2[2];
 size_t local_size2[2];
+
+int imageOffset, networkOffset;
 
 void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int inDim, int outDim, int N) {
 
@@ -270,6 +268,8 @@ void cnn_init()
 	CHECK_ERROR(err);
 
 	/* CREATE PROGRAM */
+	char* kernel_source;
+	size_t kernel_source_size;
 	kernel_source = get_source_code("kernel.cl", &kernel_source_size);
 	program = clCreateProgramWithSource(context, 1, (const char**)&kernel_source, &kernel_source_size, &err);
 	CHECK_ERROR(err);
