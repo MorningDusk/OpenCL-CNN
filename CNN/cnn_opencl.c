@@ -94,7 +94,6 @@ const int CONV_TEMP_BUFFER_SIZE = 589824;
 const int LAYER_BUFFER_SIZE = 512;
 const int OUT_NEURON_SIZE = 10;
 
-
 cl_int err;
 cl_platform_id platform;
 cl_device_id device;
@@ -137,7 +136,7 @@ void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int in
 	local_size2[0] = TS * TS;
 	local_size2[1] = 1;
 
-	err = clEnqueueNDRangeKernel(queue, conv1_layer, 1, NULL, global_size2, local_size2, 0, NULL, NULL);
+	err = clEnqueueNDRangeKernel(queue, conv1_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
 	CHECK_ERROR(err);
 
 	// (inputs, outputs, networks, networkOffset, inDim, outDim, N)
