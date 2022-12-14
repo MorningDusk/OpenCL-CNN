@@ -1,10 +1,10 @@
 #define ReLU(x) (((x)>0)?(x):0)
-__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, const int outDim, const int N){
+__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, 
+const int outDim, const int N) {
 	
     const int GROUP_J = get_global_id(0);
 
     __global float* input = inputs + imageOffset;
-    __global float* output = outputs;
 
     int i, j, x, y;
     
@@ -22,7 +22,8 @@ __kernel void convolution_1 (__global float *inputs, const int imageOffset, __gl
             x = col + j - 1;
             y = row + i - 1;
 
-            output[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = (0 <= x && x < N && 0 <= y && y < N ? input[((dim * N) + y) * N + x] : 0);
+            outputs[((dim * 3 * 3) + (3 * i + j)) * (N * N) + (row * N + col)] = 
+            (0 <= x && x < N && 0 <= y && y < N ? input[((dim * N) + y) * N + x] : 0);
 
         }
 
@@ -31,52 +32,50 @@ __kernel void convolution_1 (__global float *inputs, const int imageOffset, __gl
 
 __kernel void convolution_2 (__global float *inputs, __global float *outputs, __global float *networks, const int networkOffset, const int inDim, const int outDim, const int N) {
     
-    const int ROW = get_local_id(0);
-    const int COL = get_local_id(1);
-    const int GROUP_ROW = get_group_id(0) * 16 + ROW;
-    const int GROUP_COL = get_group_id(1) * 16 + COL;
+    const int ROW = get_local_id(1);
+    const int COL = get_local_id(0);
+    const int GROUP_ROW = get_group_id(1) * 16 + ROW;
+    const int GROUP_COL = get_group_id(0) * 16 + COL;
 
-    __global float* input = inputs;
-    __global float* output = outputs;
-    __global float * filters = networks + networkOffset;
-    __global float * biases = networks + networkOffset + (inDim * outDim * 9);
+    __global float* filters = networks + networkOffset;
+    __global float* biases = networks + networkOffset + (inDim * outDim * 9);
 
     __local float filter[16][16];
     __local float inputSub[16][16];
 
     int i, j;
 
-    int rowA = outDim; 
-    int colA = inDim * 3 * 3;
+    int colA = outDim;
+    int rowA = inDim * 3 * 3;
 
-    int rowB = inDim * 3 * 3;
-    int colB = N * N;
+    int colB = inDim * 3 * 3;
+    int rowB = N * N;
 
     float sum = 0.0f;
 
     #pragma unroll
-    for (i = 0; i < colA; i += 16) {
+    for (i = 0; i < rowA; i += 16) {
 
-        const int TEMP_COL = i + COL;
         const int TEMP_ROW = i + ROW;
+        const int TEMP_COL = i + COL;
 
-        filter[COL][ROW] = (GROUP_COL < outDim && TEMP_ROW < colA ? filters[GROUP_COL * colA + TEMP_ROW] : 0);
-        inputSub[COL][ROW] = (TEMP_COL < rowB && GROUP_ROW < colB ? input[TEMP_COL * colB + GROUP_ROW] : 0);
+        filter[ROW][COL] = (GROUP_ROW < outDim && TEMP_COL < rowA ? filters[GROUP_ROW * rowA + TEMP_COL] : 0);
+        inputSub[ROW][COL] = (TEMP_ROW < colB && GROUP_COL < rowB ? inputs[TEMP_ROW * rowB + GROUP_COL] : 0);
       
         barrier(CLK_LOCAL_MEM_FENCE);   
 
         #pragma unroll
         for (j = 0; j < 16; j++) {
-            sum += input[j][ROW] * filter[COL][j];
+            sum += inputSub[j][COL] * filter[ROW][j];
         }
 
         barrier(CLK_LOCAL_MEM_FENCE);
     
     }
 
-    if (GROUP_COL < rowA && GROUP_ROW < colB) {
-        sum += biases[GROUP_COL];
-        output[GROUP_COL * colB + GROUP_ROW] = ReLU(sum);
+    if (GROUP_ROW < colA && GROUP_COL < rowB) {
+        sum += biases[GROUP_ROW];
+        outputs[GROUP_ROW * rowB + GROUP_COL] = ReLU(sum);
     }
 
 }
