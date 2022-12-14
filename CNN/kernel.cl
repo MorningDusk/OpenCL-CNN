@@ -45,22 +45,23 @@ __kernel void convolution_2 (__global float *inputs, __global float *outputs, __
 
     int i, j;
 
-    int colA = outDim;
-    int rowA = inDim * 3 * 3;
-
-    int colB = inDim * 3 * 3;
-    int rowB = N * N;
+    int filterRow = inDim * 3 * 3;
+    int filterCol = outDim;
+    
+    int inputRow = N * N;
+    int inputCol = inDim * 3 * 3;
+    
 
     float sum = 0.0f;
 
     #pragma unroll
-    for (i = 0; i < rowA; i += 16) {
+    for (i = 0; i < filterRow; i += 16) {
 
         const int TEMP_ROW = i + ROW;
         const int TEMP_COL = i + COL;
 
-        filter[ROW][COL] = (GROUP_ROW < outDim && TEMP_COL < rowA ? filters[GROUP_ROW * rowA + TEMP_COL] : 0);
-        inputSub[ROW][COL] = (TEMP_ROW < colB && GROUP_COL < rowB ? inputs[TEMP_ROW * rowB + GROUP_COL] : 0);
+        filter[ROW][COL] = (GROUP_ROW < outDim && TEMP_COL < filterRow ? filters[GROUP_ROW * filterRow + TEMP_COL] : 0);
+        inputSub[ROW][COL] = (TEMP_ROW < inputCol && GROUP_COL < inputRow ? inputs[TEMP_ROW * inputRow + GROUP_COL] : 0);
       
         barrier(CLK_LOCAL_MEM_FENCE);   
 
@@ -73,9 +74,9 @@ __kernel void convolution_2 (__global float *inputs, __global float *outputs, __
     
     }
 
-    if (GROUP_ROW < colA && GROUP_COL < rowB) {
+    if (GROUP_ROW < filterCol && GROUP_COL < inputRow) {
         sum += biases[GROUP_ROW];
-        outputs[GROUP_ROW * rowB + GROUP_COL] = ReLU(sum);
+        outputs[GROUP_ROW * inputRow + GROUP_COL] = ReLU(sum);
     }
 
 }
