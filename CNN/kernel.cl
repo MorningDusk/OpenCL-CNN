@@ -1,5 +1,6 @@
-#define ReLU(x) (((x)>0)?(x):0)
-__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, const int outDim, const int N){
+#define ReLU(x) (((x) > 0) ? (x) : 0)
+
+__kernel void convolution_1 (__global float *inputs, const int imageOffset, __global float *outputs, const int outDim, const int N, const int batchCount) {
 	
     const int GROUP_J = get_global_id(0);
 
@@ -100,14 +101,12 @@ __kernel void pooling_max (__global float *inputs, __global float *outputs, cons
 	output= outputs + (N * N) * GROUP_NUM;
 
 	#pragma unroll
-	for(int i=0; i<2;i++){
+	for(int i=0; i<2;i++) {
 
 		#pragma unroll
-		for(int j=0;j<2;j++){
-
+		for(int j=0;j<2;j++) {
 			temp = input[(N * 2) * (2 * frow + i) + (2 * fcol + j)];    
             if (max < temp) max = temp;
-		
         }
 
 	}
@@ -134,13 +133,55 @@ __kernel void fc_layer (__global float *inputs, __global float *outputs, __globa
 	if (OUTPUT_GROUP >= outDim) return;
 	
 	#pragma unroll
-	for(int i=0;i<inDim;i++) {
-		
+	for(int i=0;i<inDim;i++)
         sum += inputs[i] * weights[i];
-	
-    }
 	
     sum += biases[0];
 	outputs[OUTPUT_GROUP] = ReLU(sum);
 
+}
+
+__kernel void softmax(__global float* outputs, const int neuron_size)
+{
+    int i;
+    float sum = 0;
+    int begin_idx = get_local_id(0) * neuron_size;
+
+    __global float* output = outputs + begin_idx;
+    float max = output[0];
+    
+    for (i = 1; i < neuron_size; i++)
+        max = (output[i] > max) ? output[i] : max;
+
+    for (i = 0; i < neuron_size; i++)
+        sum += exp(output[i] - max);
+
+    for (i = 0; i < neuron_size; i++)
+        output[i] = exp(output[i] - max) / sum;
+
+    barrier(CLK_LOCAL_MEM_FENCE);
+}
+
+__kernel void find_max_and_conf(__global float* inputs, __global float* labels, __global float* confidences, const int classNum, const int batchOffset)
+{
+    int i = 0;
+    int max_idx = 0;
+    float max = 0;
+    __global float* input = inputs + get_local_id(0) * classNum;
+
+    for (i = 0; i < classNum; i++)
+    {
+        if (max < input[i])
+        {
+            max = input[i];
+            max_idx = i;
+        }
+    }
+    
+    int loc = get_local_id(0) + batchOffset;
+    max_idx += classNum * get_local_id(0);
+    labels[loc] = max_idx;
+    confidences[loc] = inputs[labels[loc]];
+
+    barrier(CLK_LOCAL_MEM_FENCE);
 }
