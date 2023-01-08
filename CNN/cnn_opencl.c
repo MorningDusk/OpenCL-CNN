@@ -94,6 +94,8 @@ const int CONV_TEMP_BUFFER_SIZE = 589824;
 const int LAYER_BUFFER_SIZE = 512;
 const int OUT_NEURON_SIZE = 10;
 
+const int BATCH_SIZE = 100;
+
 cl_int err;
 cl_platform_id platform;
 cl_device_id device;
@@ -102,11 +104,14 @@ cl_command_queue queue;
 cl_program program;
 
 cl_kernel conv1_layer, conv2_layer, p_layer, f_layer;
+cl_kernel somax, fmac;
 
 cl_mem imageBuffer, networkBuffer;
 cl_mem convInputBuffer, convTempBuffer, convOutputBuffer;
 cl_mem poolInputBuffer, poolOutputBuffer;
 cl_mem fcInputBuffer, fcOutputBuffer;
+
+cl_mem labelBuffer, confidenceBuffer;
 
 size_t global_size;
 size_t local_size;
@@ -135,10 +140,15 @@ void convolution_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int in
 	err = clSetKernelArg(conv1_layer, 4, sizeof(cl_int), &N);
 	CHECK_ERROR(err);
 
+	err = clSetKernelArg(conv1_layer, 5, sizeof(cl_int), &BATCH_SIZE);
+	CHECK_ERROR(err);
+
 	global_size2[0] = N * N * outDim;
-	global_size2[1] = 1;
+	global_size2[1] = BATCH_SIZE;
+	// global_size2[1] = 1;
 	local_size2[0] = TS * TS;
-	local_size2[1] = 1;
+	// local_size2[1] = 1;
+	local_size2[1] = BATCH_SIZE;
 
 	err = clEnqueueNDRangeKernel(queue, conv1_layer, 2, NULL, global_size2, local_size2, 0, NULL, NULL);
 	CHECK_ERROR(err);
@@ -215,6 +225,43 @@ void fc_layer(cl_mem* inputs, cl_mem* outputs, cl_mem* networks, int inDim, int 
 	CHECK_ERROR(err);
 }
 
+
+void softmax(cl_mem* outputs, int N)
+{
+	err = clSetKernelArg(somax, 0, sizeof(cl_mem), outputs);
+	CHECK_ERROR(err);
+	err = clSetKernelArg(somax, 1, sizeof(cl_mem), &N);
+	CHECK_ERROR(err);
+
+	global_size = BATCH_SIZE * N;
+	local_size = BATCH_SIZE;
+	
+	err = clEnqueueNDRangeKernel(queue, somax, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
+	CHECK_ERROR(err);
+}
+
+void find_max_and_conf(cl_mem* inputs, cl_mem* labelBuffer, cl_mem* confidenceBuffer, int classNum, int batchOffset)
+{
+	err = clSetKernelArg(fmac, 0, sizeof(cl_mem), inputs);
+	CHECK_ERROR(err);
+	err = clSetKernelArg(fmac, 1, sizeof(cl_mem), labelBuffer);
+	CHECK_ERROR(err);
+	err = clSetKernelArg(fmac, 2, sizeof(cl_mem), confidenceBuffer);
+	CHECK_ERROR(err);
+	err = clSetKernelArg(fmac, 3, sizeof(cl_int), &classNum);
+	CHECK_ERROR(err);
+	err = clSetKernelArg(fmac, 4, sizeof(cl_int), &batchOffset);
+	CHECK_ERROR(err);
+
+	global_size = classNum * BATCH_SIZE;
+	local_size = classNum;
+
+	err = clEnqueueNDRangeKernel(queue, fmac, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
+	CHECK_ERROR(err);
+}
+
+/*
+
 float* alloc_layer(size_t n)
 {
 	return (float*)malloc(n * sizeof(float));
@@ -255,8 +302,9 @@ int find_max(float* input, int classNum)
 
 	return maxIndex;
 }
+*/
 
-void cnn_init()
+void cnn_init(void)
 {
 
 	/* GET DEVICE INFO */
@@ -294,6 +342,11 @@ void cnn_init()
 	CHECK_ERROR(err);
 	f_layer = clCreateKernel(program, "fc_layer", &err);
 	CHECK_ERROR(err);
+
+	somax = clCreateKernel(program, "softmax", &err);
+	CHECK_ERROR(err);
+	fmac = clCreateKernel(program, "find_max_and_conf", &err);
+	CHECK_ERROR(err);
 }
 
 void cnn(float* images, float* network, int* labels, float* confidences, int num_images)
@@ -310,29 +363,36 @@ void cnn(float* images, float* network, int* labels, float* confidences, int num
 	networkBuffer = clCreateBuffer(context, CL_MEM_READ_ONLY | CL_MEM_COPY_HOST_PTR, NETWORK_BUFFER_SIZE, network, &err);
 	CHECK_ERROR(err);
 
-	convInputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE, NULL, &err);
+	convInputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE * BATCH_SIZE, NULL, &err);
 	CHECK_ERROR(err);
-	convTempBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * CONV_TEMP_BUFFER_SIZE, NULL, &err);
+	convTempBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * CONV_TEMP_BUFFER_SIZE * BATCH_SIZE, NULL, &err);
 	CHECK_ERROR(err);
-	convOutputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE, NULL, &err);
-	CHECK_ERROR(err);
-
-	poolInputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE, NULL, &err);
-	CHECK_ERROR(err);
-	poolOutputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE, NULL, &err);
+	convOutputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE * BATCH_SIZE, NULL, &err);
 	CHECK_ERROR(err);
 
-	fcInputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * LAYER_BUFFER_SIZE, NULL, &err);
+	poolInputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE * BATCH_SIZE, NULL, &err);
 	CHECK_ERROR(err);
-	fcOutputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * LAYER_BUFFER_SIZE, NULL, &err);
+	poolOutputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * BUFFER_SIZE * BATCH_SIZE, NULL, &err);
+	CHECK_ERROR(err);
+
+	fcInputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * LAYER_BUFFER_SIZE * BATCH_SIZE, NULL, &err);
+	CHECK_ERROR(err);
+	fcOutputBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * LAYER_BUFFER_SIZE * BATCH_SIZE, NULL, &err);
+	CHECK_ERROR(err);
+
+	labelBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(int) * num_images, NULL, &err);
+	CHECK_ERROR(err);
+	confidenceBuffer = clCreateBuffer(context, CL_MEM_READ_WRITE, sizeof(float) * num_images, NULL, &err);
 	CHECK_ERROR(err);
 
 	// Allocate memory for fc layer
-	float* fc = alloc_layer(10);
+	// float* fc = alloc_layer(10 * BATCH_SIZE);
 
-	for (i = 0; i < num_images; i++) {
+	int iterationCount = num_images / BATCH_SIZE;
 
-		imageOffset = i * IMAGE_SIZE;
+	for (i = 0; i < iterationCount; i++) {
+
+		imageOffset = i * IMAGE_SIZE * BATCH_SIZE;
 		networkOffset = 0;
 
 		convolution_layer(&imageBuffer, &convOutputBuffer, &networkBuffer, CONV_LAYERS_ARGS[0][0], CONV_LAYERS_ARGS[0][1], CONV_LAYERS_ARGS[0][2]);
@@ -382,14 +442,28 @@ void cnn(float* images, float* network, int* labels, float* confidences, int num
 		networkOffset += NETWORK_SIZES[28] + NETWORK_SIZES[29];
 		fc_layer(&fcInputBuffer, &fcOutputBuffer, &networkBuffer, FC_LAYER_SIZES[1], FC_LAYER_SIZES[2]);
 
-		err = clEnqueueReadBuffer(queue, fcOutputBuffer, CL_TRUE, 0, sizeof(float) * OUT_NEURON_SIZE, fc, 0, NULL, NULL);
-		CHECK_ERROR(err);
+		// 필요 없어질 코드 - 어차피 max와 fc[max] 값만 가져올 것이기 때문에
+		// err = clEnqueueReadBuffer(queue, fcOutputBuffer, CL_TRUE, 0, sizeof(float) * OUT_NEURON_SIZE * BATCH_SIZE, fc, 0, NULL, NULL);
+		// CHECK_ERROR(err);
 
-		softmax(fc, OUT_NEURON_SIZE);
+		// 추가 병렬화 필요 1
+		// softmax(fc, OUT_NEURON_SIZE);
 
-		labels[i] = find_max(fc, OUT_NEURON_SIZE);
-		confidences[i] = fc[labels[i]];
+		// 통합 후 추가 병렬화 2
+		// labels[i] = find_max(fc, OUT_NEURON_SIZE);
+		// confidences[i] = fc[labels[i]];
+
+		// The new parallel code
+		softmax(&fcOutputBuffer, OUT_NEURON_SIZE);
+		find_max_and_conf(&fcOutputBuffer, &labelBuffer, &confidenceBuffer, OUT_NEURON_SIZE, i * BATCH_SIZE);
 	}
+
+	// Only take labels and confidences; Decrease reading buffers
+	err = clEnqueueReadBuffer(queue, labelBuffer, CL_TRUE, 0, sizeof(int) * num_images, labels, 0, NULL, NULL);
+	CHECK_ERROR(err);
+
+	err = clEnqueueReadBuffer(queue, confidenceBuffer, CL_TRUE, 0, sizeof(float) * num_images, confidences, 0, NULL, NULL);
+	CHECK_ERROR(err);
 
 	// Release for Build Info
 	clReleaseCommandQueue(queue);
@@ -402,6 +476,9 @@ void cnn(float* images, float* network, int* labels, float* confidences, int num
 	clReleaseKernel(f_layer);
 	clReleaseKernel(p_layer);
 
+	clReleaseKernel(somax);
+	clReleaseKernel(fmac);
+
 	// Release Buffer
 	clReleaseMemObject(imageBuffer);
 	clReleaseMemObject(networkBuffer);
@@ -413,5 +490,8 @@ void cnn(float* images, float* network, int* labels, float* confidences, int num
 	clReleaseMemObject(poolInputBuffer);
 	clReleaseMemObject(poolOutputBuffer);
 
-	free(fc);
+	clReleaseMemObject(labelBuffer);
+	clReleaseMemObject(confidenceBuffer);
+
+	// free(fc);
 }
