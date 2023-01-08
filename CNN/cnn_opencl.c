@@ -233,8 +233,8 @@ void softmax(cl_mem* outputs, int N)
     err = clSetKernelArg(somax, 1, sizeof(cl_mem), &N);
     CHECK_ERROR(err);
 
-    global_size = BATCH_SIZE * N;
-    local_size = BATCH_SIZE;
+    global_size = BATCH_SIZE;
+    local_size = 1;
     
     err = clEnqueueNDRangeKernel(queue, somax, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
     CHECK_ERROR(err);
@@ -253,8 +253,8 @@ void find_max_and_conf(cl_mem* inputs, cl_mem* labelBuffer, cl_mem* confidenceBu
     err = clSetKernelArg(fmac, 4, sizeof(cl_int), &batchOffset);
     CHECK_ERROR(err);
 
-    global_size = classNum * BATCH_SIZE;
-    local_size = classNum;
+    global_size = BATCH_SIZE;
+    local_size = 1;
 
     err = clEnqueueNDRangeKernel(queue, fmac, 1, NULL, &global_size, &local_size, 0, NULL, NULL);
     CHECK_ERROR(err);
